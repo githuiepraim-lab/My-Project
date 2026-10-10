@@ -10,6 +10,7 @@
   models <provider>           ask the provider which models it offers
   test [prompt]               send one real request through the router
   usage                       tokens, latency and cost so far
+  doctor                      find out why the assistant cannot connect to Gemini
 """
 from __future__ import annotations
 
@@ -64,6 +65,10 @@ def main(argv: list[str]) -> int:
         r = hub.ask(" ".join(args) or "Reply with the single word: ready")
         print(f"[{r.label}] {r.text}\n{r.usage.input} in / {r.usage.output} out, "
               f"{r.latency:.2f}s, cost={r.cost}")
+    elif cmd == "doctor":
+        from .doctor import diagnose
+        status, msg = diagnose(C.get_api_key("gemini"))
+        print(f"[{status}] {msg}")
     elif cmd == "usage":
         print(json.dumps(get_hub().usage.summary(), indent=2))
     else:

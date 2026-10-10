@@ -296,14 +296,18 @@ def _cooling(model: str) -> bool:
 
 
 def api_key(refresh: bool = False) -> str:
-    """The Gemini key from config/api_keys.json. Cached; never raises."""
+    """The Gemini key from config/api_keys.json. Cached once found; never raises.
+
+    An EMPTY result is not cached: it used to be, so a key pasted after the app
+    started was ignored until restart ("it can't find my key")."""
     global _cached_key
     with _key_lock:
-        if _cached_key is not None and not refresh:
+        if _cached_key and not refresh:
             return _cached_key
         try:
+            from core.ai.doctor import clean_key
             data = json.loads(_KEY_FILE.read_text(encoding="utf-8"))
-            _cached_key = str(data.get("gemini_api_key") or "")
+            _cached_key = clean_key(data.get("gemini_api_key") or "")
         except Exception:
             _cached_key = ""
         return _cached_key

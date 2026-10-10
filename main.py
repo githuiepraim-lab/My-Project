@@ -291,8 +291,16 @@ def _render_prompt(template: str, values: dict) -> str:
 
 
 def _get_api_key() -> str:
-    with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)["gemini_api_key"]
+    """The saved Gemini key, cleaned of the whitespace/quotes that pasting adds."""
+    from core.ai.doctor import clean_key
+    try:
+        with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
+            key = clean_key(json.load(f).get("gemini_api_key", ""))
+    except (OSError, ValueError):
+        key = ""
+    if not key:
+        raise RuntimeError("No Gemini API key is saved yet")
+    return key
 
 
 def _load_system_prompt() -> str:
@@ -2036,6 +2044,29 @@ class JarvisLive:
 
     # ── dashboard command relay ─────────────────────────────────────────────
 
+    def _schedule_diagnosis(self) -> None:
+        """After a failed connect, find out WHICH problem it is (once per failure
+        streak) and say so in plain words, instead of a blanket 'use a VPN'."""
+        if getattr(self, "_diag_done", False):
+            return
+        self._diag_done = True
+
+        async def run():
+            try:
+                from core.ai.doctor import diagnose
+                try:
+                    key = _get_api_key()
+                except Exception:
+                    key = ""
+                status, msg = await asyncio.to_thread(diagnose, key)
+                self.ui.write_log(f"SYS: Diagnosis — {msg}")
+                if status in ("no_key", "bad_format", "bad_key"):
+                    self.ui.set_state("SLEEPING")
+                    self.ui.prompt_reconfig()
+            except Exception as ex:
+                print(f"[Doctor] {type(ex).__name__}: {ex}")
+        asyncio.create_task(run())
+
     async def _process_dashboard_commands(self) -> None:
         while True:
             try:
@@ -2164,6 +2195,7 @@ class JarvisLive:
                         self.ui.set_state("LISTENING")
                         self.ui.write_log("SYS: JARVIS online.")
                     self._conn_backoff = 3          # connected: forget earlier failures
+                    self._diag_done = False
 
                     if self._dashboard:
                         await self._dashboard.broadcast({"type": "status", "state": "active"})
@@ -2299,8 +2331,9 @@ class JarvisLive:
                     self._conn_backoff = _conn_backoff
                     self.ui.write_log(
                         f"NET: Connection failed — retrying in {_conn_backoff}s. "
-                        "(a VPN may be required)"
+                        "Checking what is wrong…"
                     )
+                    self._schedule_diagnosis()
                 else:
                     # Unknown failure: say WHY on screen (it used to reach only the
                     # console, so the HUD just flickered thinking/sleeping) and back
@@ -2313,6 +2346,7 @@ class JarvisLive:
                     except Exception:
                         why = type(e).__name__
                     self.ui.write_log(f"ERR: Could not connect — {why}. Retrying in {_conn_backoff}s.")
+                    self._schedule_diagnosis()
             finally:
                 self.session = None
                 # Only save if there was a real conversation (≥3 turns)

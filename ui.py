@@ -5619,10 +5619,22 @@ class MainWindow(QMainWindow):
 
     def _on_setup_done(self, key: str, os_name: str):
         os.makedirs(CONFIG_DIR, exist_ok=True)
-        API_FILE.write_text(
-            json.dumps({"gemini_api_key": key, "os_system": os_name}, indent=4),
-            encoding="utf-8",
-        )
+        # Merge, don't overwrite: this file also holds camera index, face style,
+        # plugin credentials and more, which a bare rewrite used to erase.
+        try:
+            existing = json.loads(API_FILE.read_text(encoding="utf-8"))
+            if not isinstance(existing, dict):
+                existing = {}
+        except Exception:
+            existing = {}
+        from core.ai.doctor import clean_key
+        existing.update({"gemini_api_key": clean_key(key), "os_system": os_name})
+        API_FILE.write_text(json.dumps(existing, indent=4), encoding="utf-8")
+        try:
+            from core import gemini as _g
+            _g.api_key(refresh=True)       # side calls pick the new key up at once
+        except Exception:
+            pass
         self._ready = True
         if self._overlay:
             self._overlay.hide()
