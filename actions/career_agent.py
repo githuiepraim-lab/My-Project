@@ -104,6 +104,4 @@ TOOL = {
         "required": ["mode"],
     },
     "handler": career_agent,
-    "behavior": "NON_BLOCKING",
-    "scheduling": "WHEN_IDLE",
 }

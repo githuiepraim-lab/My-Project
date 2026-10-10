@@ -24,7 +24,9 @@ def test_tool_is_valid_for_the_action_loader(tmp_path):
     reg = discover_actions(Path("actions"), logger=lambda s: None)
     assert reg.has("multi_ai")
     decl = [d for d in reg.get_tool_declarations() if d["name"] == "multi_ai"][0]
-    assert decl["behavior"] == "NON_BLOCKING" and len(decl["description"]) < 600
+    # No Live-only fields: an unsupported `behavior` can make the server reject the whole
+    # session at connect, which looked like the assistant flickering thinking/sleeping.
+    assert "behavior" not in decl and len(decl["description"]) < 600
 
 
 def test_compare_returns_each_answer(action):

@@ -2163,6 +2163,7 @@ class JarvisLive:
                         self._awake = True
                         self.ui.set_state("LISTENING")
                         self.ui.write_log("SYS: JARVIS online.")
+                    self._conn_backoff = 3          # connected: forget earlier failures
 
                     if self._dashboard:
                         await self._dashboard.broadcast({"type": "status", "state": "active"})
@@ -2301,7 +2302,17 @@ class JarvisLive:
                         "(a VPN may be required)"
                     )
                 else:
-                    self._conn_backoff = 3
+                    # Unknown failure: say WHY on screen (it used to reach only the
+                    # console, so the HUD just flickered thinking/sleeping) and back
+                    # off instead of retrying every 3 s forever.
+                    _conn_backoff = min(getattr(self, "_conn_backoff", 3) * 2 or 3, 30)
+                    self._conn_backoff = _conn_backoff
+                    try:
+                        from core.ai.redact import redact as _redact
+                        why = _redact(f"{type(e).__name__}: {str(e)[:140]}")
+                    except Exception:
+                        why = type(e).__name__
+                    self.ui.write_log(f"ERR: Could not connect — {why}. Retrying in {_conn_backoff}s.")
             finally:
                 self.session = None
                 # Only save if there was a real conversation (≥3 turns)

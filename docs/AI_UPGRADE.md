@@ -90,3 +90,8 @@ A "no rules / uncensored" mode. The assistant keeps its safety behaviour; it can
 * Face before: `images/face_before.png` · after: `images/face_after.png` · states: `images/face_after_states.png` · expressions: `images/face_expressions.png`
 
 ![expressions](images/face_expressions.png)
+
+![human 3D face](images/face_human_3d.png)
+
+## Startup flicker (thinking ⇄ sleeping)
+That pattern is the connect-retry loop: connecting shows THINKING, a failed attempt falls to SLEEPING, then it retries. Two fixes: the new tools no longer declare the Live-only `behavior` field (no existing tool uses it, and a server that rejects it fails every connect), and any connection failure now prints its reason in the log (`ERR: Could not connect — …`) and backs off 3→6→12→24→30 s instead of retrying every 3 s silently. If you still see it, the log line now says why (bad/missing key, VPN/network, quota).

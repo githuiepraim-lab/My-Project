@@ -773,6 +773,16 @@ class HoloAvatar:
         pc = np.array([primary.red(), primary.green(), primary.blue()], dtype=np.float32)
         col += rim[:, None] * pc * (0.30 + 0.25 * amp)
 
+        # Living skin is not one colour: blood shows in the cheeks, nose tip and
+        # ears, and the brow ridge and under-chin fall into shade.
+        vx, vy = verts[:, 0], verts[:, 1]
+        def _g(cx, cy, rad):
+            return np.exp(-(((vx - cx) ** 2 + (vy - cy) ** 2) / (rad * rad)))[:, None]
+        col += (_g(-0.52, -0.22, 0.24) + _g(0.52, -0.22, 0.24)) * np.array([24.0, -5.0, -9.0], dtype=np.float32)
+        col += _g(0.0, -0.34, 0.10) * np.array([18.0, -3.0, -6.0], dtype=np.float32)
+        col -= (_g(-0.30, 0.20, 0.16) + _g(0.30, 0.20, 0.16)) * 14.0        # brow ridge
+        col -= np.clip((-0.78 - vy) / 0.30, 0.0, 1.0)[:, None] * 26.0       # under the chin
+
         # Fade the back of the head and the neck into the background.
         f = (0.30 + 0.70 * self._fade)[:, None]
         bgc = np.array([bg.red(), bg.green(), bg.blue()], dtype=np.float32)
@@ -790,6 +800,31 @@ class HoloAvatar:
         np.add.at(acc, i, col[j])
         col = 0.45 * col + 0.55 * (acc / cnt)
         return np.clip(col, 0, 255)
+
+    def _paint_shoulders(self, p: QPainter, xs, ys, primary: QColor) -> None:
+        """A collar and shoulders under the neck, with a slow breath, so the
+        head sits on a body instead of floating."""
+        cx, w, yb = float(xs.mean()), float(np.ptp(xs)), float(ys.max())
+        breath = math.sin(self._t * 1.15) * w * 0.006
+        y0 = yb - w * 0.16 + breath
+        path = QPainterPath(QPointF(cx - w * 0.20, y0))
+        path.quadTo(QPointF(cx - w * 0.45, y0 + w * 0.05), QPointF(cx - w * 0.95, y0 + w * 0.26))
+        path.quadTo(QPointF(cx - w * 1.25, y0 + w * 0.42), QPointF(cx - w * 1.30, y0 + w * 1.4))
+        path.lineTo(QPointF(cx + w * 1.30, y0 + w * 1.4))
+        path.quadTo(QPointF(cx + w * 1.25, y0 + w * 0.42), QPointF(cx + w * 0.95, y0 + w * 0.26))
+        path.quadTo(QPointF(cx + w * 0.45, y0 + w * 0.05), QPointF(cx + w * 0.20, y0))
+        path.closeSubpath()
+        g = QLinearGradient(0, y0, 0, y0 + w * 0.9)
+        g.setColorAt(0.0, QColor(58, 70, 90))
+        g.setColorAt(1.0, QColor(18, 24, 34))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QBrush(g))
+        p.drawPath(path)
+        rim = QColor(primary)                       # the HUD colour catches the shoulder edge
+        rim.setAlpha(70)
+        p.setPen(QPen(rim, max(1.0, w * 0.006)))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawPath(path)
 
     def _hair_anchors(self, verts, norms):
         """Vertices tracing the hairline across the forehead and down the
@@ -925,6 +960,7 @@ class HoloAvatar:
                     primary: QColor, bg: QColor, amp: float) -> None:
         a, b, c = self._fa, self._fb, self._fc
         vcol = self._vertex_colours(norms, verts, primary, bg, amp)
+        self._primary = primary
 
         fn = np.cross(verts[b] - verts[a], verts[c] - verts[a])
         fn /= np.maximum(np.linalg.norm(fn, axis=1, keepdims=True), 1e-9)
@@ -973,6 +1009,7 @@ class HoloAvatar:
         self._paint_real_features(p, xs, ys, r)
 
     def _paint_real_features(self, p: QPainter, xs, ys, r: float) -> None:
+        self._paint_shoulders(p, xs, ys, getattr(self, "_primary", QColor(0, 220, 255)))
         face = max(0.0, math.cos(self._yaw) * math.cos(self._pitch)) ** 2
         if face < 0.02:
             return

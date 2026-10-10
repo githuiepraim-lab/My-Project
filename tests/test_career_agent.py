@@ -51,3 +51,10 @@ def test_tool_registers(tmp_path):
     from pathlib import Path
     from core.action_loader import discover_actions
     assert discover_actions(Path("actions"), logger=lambda s: None).has("career_agent")
+
+
+def test_no_new_tool_uses_live_only_fields():
+    from pathlib import Path
+    from core.action_loader import discover_actions
+    for d in discover_actions(Path("actions"), logger=lambda s: None).get_tool_declarations():
+        assert set(d) <= {"name", "description", "parameters"}, d["name"]

@@ -95,6 +95,4 @@ TOOL = {
         "required": ["mode"],
     },
     "handler": multi_ai,
-    "behavior": "NON_BLOCKING",
-    "scheduling": "WHEN_IDLE",
 }
