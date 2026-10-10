@@ -84,3 +84,9 @@ python bench/benchmark.py --baseline /path/to/original/checkout
 
 ## What was deliberately not built
 A "no rules / uncensored" mode. The assistant keeps its safety behaviour; it can still be blunt, candid and direct, which is configurable in `core/prompt.txt`.
+
+## Reports and images
+* [Test & benchmark report](TEST_REPORT.md)
+* Face before: `images/face_before.png` · after: `images/face_after.png` · states: `images/face_after_states.png` · expressions: `images/face_expressions.png`
+
+![expressions](images/face_expressions.png)
