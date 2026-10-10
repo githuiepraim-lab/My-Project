@@ -4254,6 +4254,14 @@ class MainWindow(QMainWindow):
         plugin_btn.clicked.connect(self._open_plugin_manager)
         lay.addWidget(plugin_btn)
 
+        ai_btn = QPushButton("🤖  AI PROVIDERS")
+        ai_btn.setFixedHeight(26)
+        ai_btn.setFont(QFont("Courier New", 7))
+        ai_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        ai_btn.setStyleSheet(_BTN_STYLE_DIM)
+        ai_btn.clicked.connect(self._open_ai_settings)
+        lay.addWidget(ai_btn)
+
         settings_btn = QPushButton("⚙  PLUGIN SETTINGS")
         settings_btn.setFixedHeight(26)
         settings_btn.setFont(QFont("Courier New", 7))
@@ -4313,6 +4321,10 @@ class MainWindow(QMainWindow):
         self._hud_btn = _row(QPushButton())
         self._hud_btn.clicked.connect(self._toggle_hud_style)
         self._refresh_hud_btn()
+
+        self._avatar_btn = _row(QPushButton())
+        self._avatar_btn.clicked.connect(self._toggle_avatar_style)
+        self._refresh_avatar_btn()
 
         w.adjustSize()
         return w
@@ -5156,6 +5168,39 @@ class MainWindow(QMainWindow):
             if face else
             "A reactor core that turns with the state and moves with your voice. "
             "Tap to switch to the animated head.")
+
+    def _refresh_avatar_btn(self):
+        from memory.config_manager import get_avatar_style
+        real = get_avatar_style() == "real"
+        self._avatar_btn.setText("🧑  FACE: REALISTIC" if real else "◈  FACE: HOLOGRAM")
+        self._avatar_btn.setStyleSheet(f"""
+            QPushButton {{ background: {C.PANEL2}; color: {C.PRI};
+                border: 1px solid {C.BORDER_A}; border-radius: 3px;
+                text-align: left; padding: 0 8px; }}
+            QPushButton:hover {{ color: {C.WHITE}; border: 1px solid {C.BORDER_B}; }}""")
+        self._avatar_btn.setToolTip("A lit human face with real eyes, hair, brows and lips. "
+                                    "Tap for the see-through hologram." if real else
+                                    "The see-through holographic head. Tap for the realistic face.")
+
+    def _toggle_avatar_style(self):
+        from memory.config_manager import get_avatar_style, save_avatar_style
+        want = "holo" if get_avatar_style() == "real" else "real"
+        save_avatar_style(want)
+        try:
+            self.hud._avatar.set_look(style=want)
+            self.hud.update()
+        except Exception:
+            pass
+        self._refresh_avatar_btn()
+        self._log.append_log("SYS: Face switched to the realistic head." if want == "real"
+                             else "SYS: Face switched to the hologram.")
+
+    def _open_ai_settings(self):
+        try:
+            from core.ai.settings_dialog import AISettingsDialog
+            AISettingsDialog(self).exec()
+        except Exception as e:
+            self._log.append_log(f"SYS: AI settings could not open ({type(e).__name__}).")
 
     def _toggle_hud_style(self):
         """Swap the centrepiece. Both objects stay in memory, so the change is

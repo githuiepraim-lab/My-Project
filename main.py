@@ -1547,6 +1547,16 @@ class JarvisLive:
                                 self._last_out_logged = ""   # new exchange
                                 self.ui.write_log(f"You: {full_in}")
                                 self._session_log.append(f"User: {full_in}")
+                                try:
+                                    # Preferences the user states are only QUEUED;
+                                    # nothing is kept until they approve it.
+                                    from memory.memory_manager import observe as _observe
+                                    for _c in _observe(full_in):
+                                        self.ui.write_log(
+                                            f"SYS: Noticed \"{_c['value']}\" — say 'review "
+                                            f"what you learned' to keep or discard it.")
+                                except Exception:
+                                    pass
                                 if self._dashboard:
                                     asyncio.create_task(self._dashboard.broadcast({
                                         "type": "log", "speaker": "user",
@@ -1563,6 +1573,10 @@ class JarvisLive:
                                 if full_out in self._last_out_logged:
                                     full_out = ""
                             if full_out:
+                                try:        # the face reacts to what was just said
+                                    self.ui.hud._avatar.react_to_text(full_out)
+                                except Exception:
+                                    pass
                                 self._last_out_logged = full_out
                                 self.ui.write_log(f"{self._asst_name}: {full_out}")
                                 self._session_log.append(f"{self._asst_name}: {full_out}")

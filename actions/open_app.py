@@ -1,4 +1,6 @@
+import os
 import time
+import re
 import subprocess
 import platform
 import shutil
@@ -77,24 +79,37 @@ def _normalize(raw: str) -> str:
 
     return raw  
 
+# A URI-style launch target such as "spotify:" or "ms-settings:display". Anything
+# with shell metacharacters, spaces or quotes is not one.
+_URI_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.\-]{1,30}:[^\s&|<>^\"%;`$]*$")
+
+
+def _start_detached(target: str) -> None:
+    """Launch without ever handing `target` to a shell. The app name comes from
+    the model, which gets it from whatever the user (or a web page they asked
+    about) said, so it is treated as untrusted: with shell=True a name like
+    'calc & del /q *' would run both commands."""
+    startfile = getattr(os, "startfile", None)
+    if startfile is not None:                      # Windows
+        startfile(target)
+    else:
+        subprocess.Popen([target], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
 def _launch_windows(app_name: str) -> bool:
 
-    if shutil.which(app_name) or shutil.which(app_name.split(".")[0]):
+    exe = shutil.which(app_name) or shutil.which(app_name.split(".")[0])
+    if exe:
         try:
-            subprocess.Popen(
-                app_name,
-                shell=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
+            _start_detached(exe)
             time.sleep(1.5)
             return True
         except Exception as e:
             print(f"[open_app] subprocess failed: {e}")
 
-    if ":" in app_name:
+    if _URI_RE.match(app_name):
         try:
-            subprocess.Popen(f"start {app_name}", shell=True)
+            _start_detached(app_name)
             time.sleep(1.0)
             return True
         except Exception:

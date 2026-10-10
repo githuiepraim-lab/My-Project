@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "settings": {
+    "strategy": "cost",
+    "mode": "auto",
+    "manual_model": "",
+    "fallback": true,
+    "max_attempts": 4,
+    "deadline_s": 45,
+    "request_timeout_s": 25,
+    "allow_downgrade": false,
+    "cross_provider_fallback": true,
+    "cache": true,
+    "cache_ttl_s": 900,
+    "max_input_tokens": 6000,
+    "max_output_tokens": 800,
+    "monthly_cost_cap_usd": null,
+    "share_memory_default": false
+  },
+  "providers": {
+    "gemini":    { "kind": "gemini", "enabled": true, "priority": 10, "share_memory": true,
+                   "models": [ { "id": "gemini-2.5-flash-lite", "tier": 0, "caps": ["text","stream","vision","tools","json"] },
+                               { "id": "gemini-2.5-flash",      "tier": 1, "caps": ["text","stream","vision","tools","json"] } ] },
+    "anthropic": { "kind": "anthropic", "enabled": false, "priority": 20, "share_memory": false,
+                   "models": [ { "id": "claude-haiku-5-5",  "tier": 0, "caps": ["text","stream","vision","tools","json"] },
+                               { "id": "claude-sonnet-5-5", "tier": 1, "caps": ["text","stream","vision","tools","json"] },
+                               { "id": "claude-opus-5-5",   "tier": 2, "caps": ["text","stream","vision","tools","json"] } ] },
+    "groq":      { "kind": "openai_compat", "enabled": false, "priority": 40, "share_memory": false,
+                   "base_url": "https://api.groq.com/openai/v1", "stream_usage": true,
+                   "models": [ { "id": "llama-3.1-8b-instant", "tier": 0, "caps": ["text","stream","tools","json"] } ] },
+    "my-own-api": { "kind": "openai_compat", "enabled": false, "priority": 60, "share_memory": false,
+                   "base_url": "https://example.com/v1", "stream_usage": false,
+                   "models": [ { "id": "any-model-id", "tier": 1, "caps": ["text","stream"] } ] },
+    "ollama":    { "kind": "ollama", "enabled": false, "priority": 5, "share_memory": true,
+                   "base_url": "http://localhost:11434", "requires_key": false,
+                   "models": [ { "id": "llama3.2", "tier": 0, "caps": ["text","stream","tools"], "local": true } ] }
+  },
+  "agents": {
+    "critic": { "model": "anthropic", "role": "You are a blunt reviewer. Find what is wrong or missing." },
+    "builder": { "model": "gemini", "role": "You are a pragmatic engineer. Propose concrete steps." }
+  }
+}

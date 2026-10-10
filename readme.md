@@ -9,6 +9,8 @@ A real-time voice AI that can hear, see, speak, and control your computer — on
 
 ---
 
+> 🧠 **Multi-AI upgrade:** several providers at once, cost-aware routing, AIs that discuss, opt-in memory learning and a realistic face — see [docs/AI_UPGRADE.md](docs/AI_UPGRADE.md).
+
 ## ✨ Overview
 
 Mark LIV gave the assistant a face. **Ephraim gives it a screen — and the stamina to keep working when a model goes down.**

@@ -1,0 +1,64 @@
+{
+  "memory": {
+    "after": {
+      "entries": 1930,
+      "queries": 30,
+      "precision_at_1": 0.833,
+      "recall_at_3": 0.967,
+      "median_ms": 0.38,
+      "p95_ms": 4.18
+    },
+    "before": {
+      "entries": 1930,
+      "queries": 30,
+      "precision_at_1": 0.533,
+      "recall_at_3": 0.667,
+      "median_ms": 2.94,
+      "p95_ms": 3.74
+    }
+  },
+  "startup": {
+    "after": {
+      "import_gemini_memory_ms": 48.1,
+      "first_use_of_ai_hub_ms": 57.2
+    },
+    "before": {
+      "import_gemini_memory_ms": 45.3
+    }
+  },
+  "new": {
+    "history_tokens": {
+      "before": 6581,
+      "after": 437,
+      "saved_pct": 93.4
+    },
+    "tool_definitions": {
+      "all_tokens": 4879,
+      "selected_tokens": 2082,
+      "needed_tool_kept": "5/5",
+      "tools": 19
+    },
+    "cache": {
+      "requests": 100,
+      "provider_calls_before": 100,
+      "provider_calls_after": 1
+    },
+    "failover_primary_down": {
+      "requests": 200,
+      "answered_before": 0,
+      "answered_after": 200,
+      "primary_calls": 2,
+      "wasted_on_dead_primary_pct": 1.0
+    },
+    "retry_bound": {
+      "max_attempts_setting": 4,
+      "provider_calls_for_50_failing_requests": 2
+    },
+    "routing_cost_simulated": {
+      "requests": 100,
+      "always_strongest_usd": 0.8,
+      "routed_usd": 0.1696,
+      "saved_pct": 78.8
+    }
+  }
+}

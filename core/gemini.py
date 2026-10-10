@@ -465,7 +465,8 @@ def _live_call(contents, config, timeout_ms: int, key: str):
 
 
 def call(contents, tier: str = FAST, config=None,
-         timeout_ms: int = DEFAULT_TIMEOUT_MS, key: str = ""):
+         timeout_ms: int = DEFAULT_TIMEOUT_MS, key: str = "",
+         models: tuple | None = None, cross_fallback: bool = True):
     """Run one generation, walking the ladder until one answers.
 
     Returns the SDK's own response object, so callers that need more than the
@@ -482,6 +483,10 @@ def call(contents, tier: str = FAST, config=None,
     ladder = _LADDERS.get(tier)
     if ladder is None:
         ladder = (tier,) + tuple(m for m in _LADDERS[SMART] if m != tier)
+    if models:
+        # The multi-provider router already chose the exact model(s) and owns
+        # the fallback decision; do not walk the ladder behind its back.
+        ladder = tuple(models)
 
     resolved_key = key or api_key()
     if not resolved_key:
@@ -492,9 +497,11 @@ def call(contents, tier: str = FAST, config=None,
     tried = [m for m in ladder if not _cooling(m)] or list(ladder)
     for model in tried:
         try:
+            t0 = time.monotonic()
             if model == LIVE:
                 reply = _live_call(contents, config, timeout_ms, resolved_key)
                 if reply is not None:
+                    _note_usage("live", reply, time.monotonic() - t0)
                     return reply
                 raise RuntimeError("the Live turn came back empty")
             if cl is None:
@@ -502,7 +509,9 @@ def call(contents, tier: str = FAST, config=None,
             kwargs = {"model": model, "contents": contents}
             if config is not None:
                 kwargs["config"] = config
-            return cl.models.generate_content(**kwargs)
+            resp = cl.models.generate_content(**kwargs)
+            _note_usage(model, resp, time.monotonic() - t0)
+            return resp
         except Exception as e:
             msg = str(e)
             if is_quota_error(msg):
@@ -518,7 +527,72 @@ def call(contents, tier: str = FAST, config=None,
                       f"{_UNAVAILABLE_SECONDS // 60} minutes")
             else:
                 print(f"[Gemini] {model}: {type(e).__name__}: {msg[:140]}")
+    if cross_fallback:
+        return _cross_provider(contents, config, timeout_ms)
     return None
+
+
+def _note_usage(model: str, resp, latency: float) -> None:
+    """Report a successful call to the shared usage log. Never raises: tracking
+    must not be able to break a request."""
+    try:
+        from core.ai import get_hub
+        from core.ai import context as _ctx
+        um = getattr(resp, "usage_metadata", None)
+        tin = int(getattr(um, "prompt_token_count", 0) or 0)
+        tout = int(getattr(um, "candidates_token_count", 0) or 0)
+        est = not (tin or tout)
+        if est:
+            tout = _ctx.estimate_tokens(getattr(resp, "text", "") or "")
+        get_hub().usage.record(
+            provider="gemini", model=model, task="side-call", tokens_in=tin,
+            tokens_out=tout, cached=int(getattr(um, "cached_content_token_count", 0) or 0),
+            estimated=est, latency=latency, cost=None, status="ok")
+    except Exception:
+        pass
+
+
+def _cross_provider(contents, config, timeout_ms: int):
+    """Every Gemini rung failed. If the user has configured another provider,
+    let it answer rather than losing the feature. Does nothing — and costs
+    nothing — for a user who has configured no other provider."""
+    try:
+        from core.ai import get_hub
+        from core.ai.types import Image, Request
+        hub = get_hub()
+        skip = frozenset({"gemini"})
+        if not hub.settings.get("cross_provider_fallback", True) or not hub.is_configured(skip):
+            return None
+        import base64
+        items = contents if isinstance(contents, (list, tuple)) else [contents]
+        texts, images = [], []
+        for item in items:
+            if isinstance(item, str):
+                texts.append(item)
+                continue
+            blob = getattr(item, "inline_data", None)
+            if blob is not None and getattr(blob, "data", None) is not None:
+                data = blob.data
+                data = base64.b64decode(data) if isinstance(data, str) else data
+                images.append(Image(data, getattr(blob, "mime_type", None) or "image/png"))
+            elif getattr(item, "text", None):
+                texts.append(item.text)
+            else:
+                return None            # a part we cannot translate faithfully
+        system = ""
+        if config is not None:
+            system = getattr(config, "system_instruction", None) or \
+                (config.get("system_instruction") if isinstance(config, dict) else "") or ""
+        req = Request(messages=[{"role": "user", "content": "\n".join(texts) or "."}],
+                      system=(_ONE_SHOT_SYSTEM + ("\n\n" + str(system) if system else "")),
+                      images=images, timeout=max(10.0, timeout_ms / 1000.0),
+                      max_output_tokens=2048, cacheable=False)
+        resp = hub.ask(req, exclude=skip)
+        print(f"[Gemini] every Gemini model failed — answered by {resp.label}")
+        return _Reply(resp.text) if resp.text else None
+    except Exception as e:
+        print(f"[Gemini] cross-provider fallback unavailable: {type(e).__name__}")
+        return None
 
 
 def text(contents, tier: str = FAST, config=None,

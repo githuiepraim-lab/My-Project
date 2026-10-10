@@ -1,0 +1,21 @@
+{
+  "route": [
+    {"id": "route-simple", "prompt": "what time is it in Tokyo?", "expect_tier": 0},
+    {"id": "route-code", "prompt": "fix this:\n```\nprint(1\n```", "expect_tier": 1},
+    {"id": "route-hard", "prompt": "Please debug and explain why this algorithm is slow, then propose an architecture that avoids the problem entirely: ", "pad": 300, "expect_tier": 2},
+    {"id": "route-classify", "prompt": "debug architecture analyze compare", "task": "classify", "pad": 80, "expect_tier": 0}
+  ],
+  "memory": [
+    {"id": "mem-stem", "seed": {"relationships": {"sister_name": {"value": "Wanjiru"}}}, "query": "my sisters", "expect_key": "sister_name"},
+    {"id": "mem-value", "seed": {"projects": {"arcade": {"value": "NextGen Gaming Arcade"}}}, "query": "gaming", "expect_key": "arcade"}
+  ],
+  "answer": [
+    {"id": "ans-ready", "prompt": "Reply with the single word: ready", "task": "classify", "expect_contains": "ready", "max_latency_s": 8},
+    {"id": "ans-json", "prompt": "Return JSON with key ok set to true and nothing else.", "task": "extract", "json": true, "expect_json_key": "ok", "max_latency_s": 8},
+    {"id": "ans-math", "prompt": "What is 17 + 25? Answer with just the number.", "task": "classify", "expect_contains": "42", "max_latency_s": 8}
+  ],
+  "tool": [
+    {"id": "tool-multi-status", "action": "multi_ai", "args": {"mode": "status"}, "expect_contains": "ready"},
+    {"id": "tool-review-empty", "action": "memory_review", "args": {"mode": "list"}, "expect_contains": "approval"}
+  ]
+}

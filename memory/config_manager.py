@@ -150,6 +150,21 @@ def save_hud_style(style: str) -> None:
     _save_flag("hud_style", s if s in HUD_STYLES else "face")
 
 
+AVATAR_STYLES = ("real", "holo")
+
+
+def get_avatar_style() -> str:
+    """How the animated head is drawn: "real" (lit skin, hair, real eyes) or
+    "holo" (the original see-through hologram)."""
+    v = str(load_api_keys().get("avatar_style", "real")).strip().lower()
+    return v if v in AVATAR_STYLES else "real"
+
+
+def save_avatar_style(style: str) -> None:
+    s = str(style or "").strip().lower()
+    _save_flag("avatar_style", s if s in AVATAR_STYLES else "real")
+
+
 # ── Live-session tuning ──────────────────────────────────────────────────────
 # Everything here is optional and has a working default, so an untouched
 # config behaves exactly like a configured one. Each value is also a way out:

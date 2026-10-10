@@ -125,6 +125,17 @@ def save_memory(memory: dict) -> None:
             json.dumps(memory, indent=2, ensure_ascii=False),
             encoding="utf-8",
         )
+    _IDX["sig"] = None            # never trust the stamp alone: two saves can share an mtime
+    _memory_changed()
+
+
+def _memory_changed() -> None:
+    """Any cached AI answer may have quoted a fact that just changed."""
+    try:
+        from core.ai import get_hub
+        get_hub().invalidate_cache()
+    except Exception:
+        pass
 
 
 def _truncate_value(val: str) -> str:
@@ -133,7 +144,7 @@ def _truncate_value(val: str) -> str:
     return val
 
 
-def _recursive_update(target: dict, updates: dict) -> bool:
+def _recursive_update(target: dict, updates: dict, depth: int = 0) -> bool:
     changed = False
     for key, value in updates.items():
         if value is None:
@@ -144,17 +155,37 @@ def _recursive_update(target: dict, updates: dict) -> bool:
             if key not in target or not isinstance(target[key], dict):
                 target[key] = {}
                 changed = True
-            if _recursive_update(target[key], value):
+            if _recursive_update(target[key], value, depth + 1):
                 changed = True
         else:
             new_val  = _truncate_value(str(value["value"] if isinstance(value, dict) else value))
-            entry    = {"value": new_val, "updated": datetime.now().strftime("%Y-%m-%d")}
+            today    = datetime.now().strftime("%Y-%m-%d")
             existing = target.get(key, {})
+
+            # The same fact stored under a different key ("sister_name" and
+            # "sisters_name") used to become two entries that drift apart. If
+            # another entry in this category already says this, refresh it.
+            if depth == 1 and not (isinstance(existing, dict) and "value" in existing):
+                twin = _find_twin(target, new_val)
+                if twin is not None:
+                    if target[twin].get("updated") != today:
+                        target[twin]["updated"] = today
+                        changed = True
+                    continue
+
             if not isinstance(existing, dict) or existing.get("value") != new_val:
+                entry = {"value": new_val, "updated": today}
+                # A changed value is a CORRECTION: keep what it replaced, so an
+                # outdated fact can be inspected or restored, but only the
+                # current one is ever shown to the model.
+                if isinstance(existing, dict) and existing.get("value"):
+                    hist = list(existing.get("history") or [])
+                    hist.append({"value": existing["value"],
+                                 "updated": existing.get("updated", "")})
+                    entry["history"] = hist[-5:]
                 target[key] = entry
                 changed = True
     return changed
-
 
 def update_memory(memory_update: dict) -> dict:
     if not isinstance(memory_update, dict) or not memory_update:
@@ -352,27 +383,12 @@ def search_memory(query: str, limit: int = 8) -> str:
 
     An empty query is treated as "show me everything you know", capped - the
     model asks that when the user says "what do you remember about me?"."""
-    memory = load_memory()
-    words  = [w for w in re.split(r"[^\w]+", (query or "").lower()) if len(w) > 1]
-
-    rows: list[tuple[int, str, str, str]] = []
-    for cat, items in memory.items():
-        if not isinstance(items, dict):
-            continue                     # skip 'sessions', which is a list
-        for key, entry in items.items():
-            val = _entry_value(entry)
-            if not val:
-                continue
-            s = _score(words, cat, key, val) if words else 1
-            if s > 0:
-                rows.append((s, cat, key, val))
-
+    rows = search_entries(query, limit=10_000)
     if not rows:
         return (f"Nothing stored about '{query}'." if query
                 else "I have not stored anything about this person yet.")
-
-    rows.sort(key=lambda r: (-r[0], r[2]))
-    lines = [f"{cat}/{_pretty(key)}: {val}" for _s, cat, key, val in rows[:max(1, limit)]]
+    shown = rows[:max(1, limit)]
+    lines = [f"{r['category']}/{_pretty(r['key'])}: {r['value']}" for r in shown]
     head  = (f"Stored facts matching '{query}':" if query
              else "Everything currently stored:")
     more  = (f"\n(+{len(rows) - len(lines)} more — search with a narrower keyword)"
@@ -421,6 +437,306 @@ def forget(key: str, category: str = "notes") -> str:
 
 
 forget_memory = forget
+
+
+# ── Ranking, dedupe, editing and approved learning ────────────────────────────
+
+_STOP = frozenset("""a an and are as at be but by do does for from had has have he her his i if in
+into is it its me my of on or our she so than that the their them then there these they this to
+was we were what when where which who why will with you your about tell know""".split())
+
+
+def _stem(w: str) -> str:
+    """Deliberately light: enough that 'sisters', 'sister' and 'sister's' meet."""
+    if len(w) > 5 and w.endswith("ies"):
+        return w[:-3] + "y"
+    if len(w) > 4 and w.endswith("ie"):        # hoodie / hoodies meet at 'hoody'
+        return w[:-2] + "y"
+    for suf in ("ing", "ed", "es", "s"):
+        if len(w) > len(suf) + 3 and w.endswith(suf):
+            return w[: -len(suf)]
+    return w
+
+
+def _tokens(text: str) -> list[str]:
+    return [_stem(w) for w in re.findall(r"[^\W_]+", (text or "").lower())
+            if len(w) > 1 and w not in _STOP]
+
+
+def _norm(text: str) -> str:
+    return " ".join(re.findall(r"[^\W_]+", (text or "").lower()))
+
+
+def _similar(a: str, b: str) -> bool:
+    na, nb = _norm(a), _norm(b)
+    if not na or not nb:
+        return False
+    if na == nb:
+        return True
+    ta, tb = set(_tokens(a)), set(_tokens(b))
+    if len(ta) < 3 or len(tb) < 3:
+        return False
+    return len(ta & tb) / len(ta | tb) >= 0.8
+
+
+def _find_twin(category: dict, value: str):
+    for k, e in category.items():
+        if isinstance(e, dict) and "value" in e and _similar(e["value"], value):
+            return k
+    return None
+
+
+_IDX: dict = {"sig": None, "memory": None, "docs": None, "inv": None, "avg": 1.0}
+
+
+def _build_index(memory: dict) -> tuple[list, dict, float]:
+    """Documents plus an inverted index (term -> [(doc, weight)]) so a query
+    touches only the entries that contain its words instead of re-tokenising
+    the whole store on every call."""
+    docs, inv = [], {}
+    for cat, items in memory.items():
+        if not isinstance(items, dict):
+            continue
+        for key, entry in items.items():
+            val = _entry_value(entry)
+            if not val:
+                continue
+            kt, vt, ct = _tokens(_pretty(key)), _tokens(val), _tokens(cat)
+            tf = _tf(kt, vt, ct)
+            di = len(docs)
+            docs.append({"category": cat, "key": key, "value": val,
+                         "updated": (entry.get("updated", "") if isinstance(entry, dict) else ""),
+                         "len": len(kt) * 3 + len(vt) + len(ct),
+                         "key_norm": _norm(_pretty(key))})
+            for term, w in tf.items():
+                inv.setdefault(term, []).append((di, w))
+    avg = (sum(d["len"] for d in docs) / len(docs)) if docs else 1.0
+    return docs, inv, (avg or 1.0)
+
+
+def _memory_signature():
+    try:
+        stt = MEMORY_PATH.stat()
+        return (str(MEMORY_PATH), stt.st_mtime_ns, stt.st_size)
+    except OSError:
+        return (str(MEMORY_PATH), None, None)
+
+
+def search_entries(query: str, limit: int = 8, memory: dict | None = None) -> list[dict]:
+    """Ranked entries for `query` (BM25 over key, value and category, with a
+    stemmer, stop-words, prefix matching and a small recency boost). No
+    embeddings and no network. The index is cached against the memory file's
+    modification stamp, so it is rebuilt only when something was saved."""
+    import math
+    if memory is None:
+        sig = _memory_signature()
+        if _IDX["sig"] != sig or _IDX["docs"] is None:
+            mem = load_memory()
+            _IDX.update(sig=sig, memory=mem)
+            _IDX["docs"], _IDX["inv"], _IDX["avg"] = _build_index(mem)
+        docs, inv, avg = _IDX["docs"], _IDX["inv"], _IDX["avg"]
+    else:
+        docs, inv, avg = _build_index(memory)
+
+    q = _tokens(query)
+    if not q:
+        rows = sorted(docs, key=lambda d: d["updated"] or "0000-00-00", reverse=True)
+        return [_public(d) for d in rows[:limit]]
+    n = len(docs) or 1
+    scores: dict[int, float] = {}
+    for t in dict.fromkeys(q):
+        postings = list(inv.get(t, ()))
+        if len(t) >= 4:                       # prefix: 'birth' finds 'birthday'
+            for term, plist in inv.items():
+                if term != t and term.startswith(t):
+                    postings.extend((di, w * 0.6) for di, w in plist)
+        if not postings:
+            continue
+        per_doc: dict[int, float] = {}
+        for di, w in postings:
+            per_doc[di] = per_doc.get(di, 0.0) + w
+        idf = math.log(1 + (n - len(per_doc) + 0.5) / (len(per_doc) + 0.5))
+        for di, f in per_doc.items():
+            scores[di] = scores.get(di, 0.0) + idf * (f * 2.2) / (
+                f + 1.2 * (0.25 + 0.75 * docs[di]["len"] / avg))
+    if not scores:
+        return []
+    today = datetime.now().date()
+    qn = _norm(query)
+    scored = []
+    for di, sc in scores.items():
+        d = docs[di]
+        if qn and qn == d["key_norm"]:
+            sc *= 1.5
+        try:
+            age = (today - datetime.strptime(d["updated"], "%Y-%m-%d").date()).days
+            sc *= 1.0 + 0.10 * max(0.0, 1.0 - age / 90.0)
+        except ValueError:
+            pass
+        scored.append((sc, d))
+    scored.sort(key=lambda x: (-x[0], x[1]["key"]))
+    return [_public(d) for _s, d in scored[:limit]]
+
+
+def _tf(kt, vt, ct) -> dict:
+    tf: dict[str, float] = {}
+    for t in kt:
+        tf[t] = tf.get(t, 0) + 3.0      # a match in the KEY is worth three in the value
+    for t in vt:
+        tf[t] = tf.get(t, 0) + 1.0
+    for t in ct:
+        tf[t] = tf.get(t, 0) + 0.5
+    return tf
+
+
+def _hit(term: str, tf: dict) -> float:
+    if term in tf:
+        return tf[term]
+    if len(term) >= 4:                   # prefix: 'birth' finds 'birthday'
+        return sum(v for k, v in tf.items() if k.startswith(term)) * 0.6
+    return 0.0
+
+
+def _public(d: dict) -> dict:
+    return {k: d[k] for k in ("category", "key", "value", "updated")}
+
+
+def relevant_context(query: str, max_chars: int = 600) -> str:
+    """The few stored facts worth sending with THIS request, as a compact block
+    for `Request.private_context`. Identity first, then best matches."""
+    memory = load_memory()
+    lines, used = [], 0
+    for field in ("name", "language"):
+        v = _entry_value((memory.get("identity") or {}).get(field))
+        if v:
+            lines.append(f"{field}: {v}")
+            used += len(lines[-1]) + 1
+    for r in search_entries(query, limit=8, memory=memory):
+        line = f"{_pretty(r['key'])}: {r['value']}"
+        if used + len(line) + 1 > max_chars:
+            break
+        if line not in lines:
+            lines.append(line)
+            used += len(line) + 1
+    return ("Known about the user:\n" + "\n".join(lines)) if lines else ""
+
+
+def history_of(key: str, category: str = "notes") -> list[dict]:
+    """Earlier values of a fact that was corrected, newest last."""
+    e = (load_memory().get(category) or {}).get(key)
+    return list(e.get("history") or []) if isinstance(e, dict) else []
+
+
+def edit_entry(category: str, key: str, value: str | None = None,
+               new_key: str | None = None) -> str:
+    """User-driven edit of one fact: change its value and/or rename its key."""
+    memory = load_memory()
+    cat = memory.get(category)
+    if not isinstance(cat, dict) or key not in cat:
+        return f"Not found: {category}/{key}"
+    entry = cat[key] if isinstance(cat[key], dict) else {"value": str(cat[key])}
+    if value is not None and value.strip():
+        hist = list(entry.get("history") or [])
+        if entry.get("value") and entry["value"] != value:
+            hist.append({"value": entry["value"], "updated": entry.get("updated", "")})
+        entry = {**entry, "value": _truncate_value(value.strip()),
+                 "updated": datetime.now().strftime("%Y-%m-%d"), "history": hist[-5:]}
+    if new_key and new_key != key:
+        del cat[key]
+        key = new_key
+    cat[key] = entry
+    save_memory(memory)
+    return f"Updated: {category}/{key}"
+
+
+delete_entry = forget
+
+
+# Approved learning. The assistant may NOTICE "I prefer short answers", but a
+# noticed preference sits in a pending list until the user says yes; nothing is
+# remembered permanently on the strength of an overheard sentence. Note this is
+# a notebook, not training: no model is changed, only what it is told.
+PENDING_PATH = BASE_DIR / "memory" / "pending.json"
+_PENDING_MAX = 20
+_LEARN = [
+    (re.compile(r"\bfrom now on[, ]+(.{8,140})", re.I), "preferences"),
+    (re.compile(r"\bi (?:really )?(?:prefer|always|never|usually|hate|dislike|love)\b[^.!?]{4,120}", re.I),
+     "preferences"),
+    (re.compile(r"\bmy name is ([A-Z][\w'-]{1,30})"), "identity"),
+    (re.compile(r"\bcall me ([A-Z][\w'-]{1,30})"), "identity"),
+    (re.compile(r"\bi (?:work|study) (?:at|as|in) [^.!?]{3,80}", re.I), "identity"),
+    (re.compile(r"\bmy (?:wife|husband|sister|brother|mother|mum|dad|father|friend|boss) "
+                r"(?:is )?(?:called |named )?[A-Z][\w'-]{1,30}"), "relationships"),
+]
+
+
+def _pending() -> list[dict]:
+    try:
+        data = json.loads(PENDING_PATH.read_text(encoding="utf-8"))
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def _save_pending(rows: list[dict]) -> None:
+    PENDING_PATH.parent.mkdir(parents=True, exist_ok=True)
+    PENDING_PATH.write_text(json.dumps(rows[-_PENDING_MAX:], indent=2, ensure_ascii=False),
+                            encoding="utf-8")
+
+
+def observe(text: str) -> list[dict]:
+    """Look at something the user said and queue anything worth remembering as
+    PENDING. Returns the new candidates. Stores nothing permanently."""
+    text = (text or "").strip()
+    if len(text) < 8 or len(text) > 600:
+        return []
+    memory = load_memory()
+    rows = _pending()
+    added = []
+    for pat, cat in _LEARN:
+        m = pat.search(text)
+        if not m:
+            continue
+        value = _truncate_value(m.group(0).strip(" ,.;"))
+        if any(_similar(value, r["value"]) for r in rows):
+            continue
+        if any(_similar(value, _entry_value(e)) for e in (memory.get(cat) or {}).values()):
+            continue                                  # already known
+        words = [w for w in _tokens(value)][:3] or ["note"]
+        row = {"id": hex(abs(hash((value, datetime.now().timestamp()))))[2:10],
+               "category": cat, "key": "_".join(words), "value": value,
+               "created": datetime.now().strftime("%Y-%m-%d")}
+        rows.append(row)
+        added.append(row)
+    if added:
+        _save_pending(rows)
+    return added
+
+
+def list_pending() -> list[dict]:
+    return _pending()
+
+
+def approve_pending(pid: str) -> str:
+    rows = _pending()
+    for r in rows:
+        if r["id"] == pid or pid == "all":
+            remember(r["key"], r["value"], r["category"])
+            if pid != "all":
+                _save_pending([x for x in rows if x["id"] != pid])
+                return f"Remembered: {r['value']}"
+    if pid == "all":
+        n = len(rows)
+        _save_pending([])
+        return f"Remembered {n} things."
+    return "No such pending item."
+
+
+def reject_pending(pid: str) -> str:
+    rows = _pending()
+    keep = [r for r in rows if r["id"] != pid] if pid != "all" else []
+    _save_pending(keep)
+    return f"Discarded {len(rows) - len(keep)}."
 
 
 # ── Session memory ─────────────────────────────────────────────────────────────

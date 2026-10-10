@@ -1,0 +1,3 @@
+# Developer-only: the offline test suite (no API keys, no network, no cost)
+-r requirements.txt
+pytest>=8,<10

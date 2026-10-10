@@ -15,6 +15,13 @@ sounddevice>=0.4,<1
 numpy>=1.24,<3
 google-genai>=2.8.0,<3
 
+# ── Multi-provider AI (core/ai) ───────────────────────────────────────────────
+# Uses `requests` (below) for every REST provider; nothing else is required.
+# Optional: with `keyring` installed, API keys go to the OS credential store
+# (Windows Credential Manager / macOS Keychain / Secret Service) instead of
+# config/secrets.json. Without it the app still works.
+keyring>=24,<26
+
 # ── Web search & browser control ──────────────────────────────────────────────
 requests>=2.31,<3
 beautifulsoup4>=4.12,<5

@@ -6,6 +6,9 @@
 
 # ── Secrets. Committing any of these publishes them. ──────────────────────────
 config/api_keys.json          # your Gemini API key, plus per-plugin credentials
+config/secrets.json           # API keys for the other AI providers (when no OS keyring)
+config/providers.json         # your provider choices and priorities (no keys, but personal)
+config/providers.json.bad
 config/certs/                 # the dashboard's TLS private key and certificate
 config/whatsapp_web/          # a LINKED WhatsApp session — committing it hands
                               # somebody your WhatsApp account, not just a key
@@ -17,6 +20,7 @@ config/whatsapp_web/          # a LINKED WhatsApp session — committing it hand
 
 # ── Personal data the assistant accumulates about you ─────────────────────────
 memory/long_term.json
+memory/pending.json
 memory/*.db
 
 # ── Python build noise ────────────────────────────────────────────────────────
@@ -48,3 +52,7 @@ desktop.ini
 logs/
 downloads/
 screenshots/
+
+# ── AI usage / eval logs ──
+logs/
+evals/results/
