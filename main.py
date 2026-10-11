@@ -1581,8 +1581,8 @@ class JarvisLive:
                                 if full_out in self._last_out_logged:
                                     full_out = ""
                             if full_out:
-                                try:        # the face reacts to what was just said
-                                    self.ui.hud._avatar.react_to_text(full_out)
+                                try:        # the face reacts and the desktop pet talks
+                                    self.ui.say(full_out)
                                 except Exception:
                                     pass
                                 self._last_out_logged = full_out
@@ -2365,6 +2365,12 @@ class JarvisLive:
 
 def main():
     ui = JarvisUI("face.png")
+    # --pet / --pet-only come from the desktop shortcut; otherwise the pet starts
+    # only if it was left switched on.
+    if "--pet" in sys.argv or "--pet-only" in sys.argv:
+        ui.start_pet(only="--pet-only" in sys.argv)
+    else:
+        ui.start_pet(force=False)
 
     def runner():
         ui.wait_for_api_key()

@@ -2941,6 +2941,7 @@ class RemoteKeyOverlay(QWidget):
 
 class MainWindow(QMainWindow):
     _log_sig        = pyqtSignal(str)
+    _say_sig        = pyqtSignal(str)       # what the assistant just said (face + pet react)
     _state_sig      = pyqtSignal(str)
     _content_sig    = pyqtSignal(str, str)   # (title, text) — thread-safe content display
     _reconfig_sig   = pyqtSignal()           # trigger setup overlay from any thread
@@ -3224,6 +3225,7 @@ class MainWindow(QMainWindow):
         self._update_metrics()
 
         self._log_sig.connect(self._log.append_log)
+        self._say_sig.connect(self._on_say)
         self._state_sig.connect(self._apply_state)
         self._content_sig.connect(self._show_content)
         self._reconfig_sig.connect(self._show_setup)
@@ -4326,6 +4328,14 @@ class MainWindow(QMainWindow):
         self._avatar_btn.clicked.connect(self._toggle_avatar_style)
         self._refresh_avatar_btn()
 
+        self._pet_btn = _row(QPushButton())
+        self._pet_btn.clicked.connect(self._toggle_pet)
+        self._shortcut_btn = _row(QPushButton("🖥  CREATE DESKTOP SHORTCUT"))
+        self._shortcut_btn.clicked.connect(self._create_shortcut)
+        for _b in (self._pet_btn, self._shortcut_btn):
+            _b.setStyleSheet(self._avatar_btn.styleSheet())
+        self._refresh_pet_btn()
+
         w.adjustSize()
         return w
 
@@ -5195,6 +5205,53 @@ class MainWindow(QMainWindow):
         self._log.append_log("SYS: Face switched to the realistic head." if want == "real"
                              else "SYS: Face switched to the hologram.")
 
+    # ── desktop pet ─────────────────────────────────────────────────────────
+    def _on_say(self, text: str):
+        """Runs on the Qt thread: the face reacts and the pet speaks."""
+        try:
+            self.hud._avatar.react_to_text(text)
+        except Exception:
+            pass
+        pet = getattr(self, "_pet", None)
+        if pet is not None and pet.isVisible():
+            pet.say(text)
+
+    def start_pet(self, only: bool = False):
+        from core.pet import DesktopPet
+        from memory.config_manager import load_api_keys
+        if getattr(self, "_pet", None) is None:
+            kind = str(load_api_keys().get("pet_kind", "cat"))
+            self._pet = DesktopPet(kind, speaking_probe=lambda: bool(getattr(self.hud, "speaking", False)))
+            self._pet.clicked.connect(lambda: (self.raise_(), self.activateWindow()))
+        self._pet.show()
+        self._pet.say("Hi! I'm here. Click me any time.", 4)
+        if only:
+            self.showMinimized()
+
+    def _toggle_pet(self):
+        from memory.config_manager import _save_flag
+        pet = getattr(self, "_pet", None)
+        if pet is not None and pet.isVisible():
+            pet.hide()
+            _save_flag("pet_enabled", False)
+        else:
+            self.start_pet()
+            _save_flag("pet_enabled", True)
+        self._refresh_pet_btn()
+
+    def _refresh_pet_btn(self):
+        pet = getattr(self, "_pet", None)
+        on = pet is not None and pet.isVisible()
+        self._pet_btn.setText("🐾  DESKTOP PET: ON" if on else "🐾  DESKTOP PET: OFF")
+
+    def _create_shortcut(self):
+        try:
+            from core.shortcut import create_shortcut
+            path = create_shortcut()
+            self._log.append_log(f"SYS: Desktop shortcut created: {path.name}. Open it to start with your pet.")
+        except Exception as e:
+            self._log.append_log(f"SYS: Could not create the shortcut ({type(e).__name__}: {str(e)[:80]}).")
+
     def _open_ai_settings(self):
         try:
             from core.ai.settings_dialog import AISettingsDialog
@@ -5813,6 +5870,19 @@ class JarvisUI:
 
     def write_log(self, text: str):
         self._win._log_sig.emit(text)
+
+    def say(self, text: str):
+        """Thread-safe: the face reacts to, and the pet speaks, what was just said."""
+        self._win._say_sig.emit(text)
+
+    def start_pet(self, only: bool = False, force: bool = True):
+        """Show the desktop pet. With force=False it starts only if it was left on."""
+        if not force:
+            from memory.config_manager import load_api_keys
+            if not load_api_keys().get("pet_enabled"):
+                return
+        self._win.start_pet(only)
+        self._win._refresh_pet_btn()
 
     def wait_for_api_key(self):
         while not self._win._ready:

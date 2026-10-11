@@ -10,6 +10,7 @@
   models <provider>           ask the provider which models it offers
   test [prompt]               send one real request through the router
   usage                       tokens, latency and cost so far
+  fix <provider>              repair a provider that gives HTTP 404 (bad model / URL)
   doctor                      find out why the assistant cannot connect to Gemini
 """
 from __future__ import annotations
@@ -65,6 +66,9 @@ def main(argv: list[str]) -> int:
         r = hub.ask(" ".join(args) or "Reply with the single word: ready")
         print(f"[{r.label}] {r.text}\n{r.usage.input} in / {r.usage.output} out, "
               f"{r.latency:.2f}s, cost={r.cost}")
+    elif cmd == "fix" and args:
+        from .autofix import autofix_models
+        print(autofix_models(get_hub(), args[0]))
     elif cmd == "doctor":
         from .doctor import diagnose
         status, msg = diagnose(C.get_api_key("gemini"))

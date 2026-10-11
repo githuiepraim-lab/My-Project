@@ -16,7 +16,8 @@ class AnthropicAdapter(Adapter):
 
     @property
     def base(self) -> str:
-        return str(self.cfg.get("base_url") or "https://api.anthropic.com").rstrip("/")
+        from .base import normalize_base
+        return normalize_base(self.kind, str(self.cfg.get("base_url") or "https://api.anthropic.com"))
 
     def _headers(self) -> dict:
         return {"Content-Type": "application/json", "x-api-key": self.api_key,

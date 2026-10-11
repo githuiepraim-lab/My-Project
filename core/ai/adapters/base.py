@@ -34,6 +34,37 @@ def classify_http(status: int, body: str = "", retry_after: str | None = None) -
     return AIError("unavailable", msg, status=status)
 
 
+_DEFAULT_PATH = {"api.groq.com": "/openai/v1", "openrouter.ai": "/api/v1",
+                 "api.together.xyz": "/v1", "api.openai.com": "/v1", "api.mistral.ai": "/v1",
+                 "api.deepseek.com": "/v1", "api.x.ai": "/v1", "api.perplexity.ai": ""}
+
+
+def normalize_base(kind: str, url: str) -> str:
+    """Repair the base URLs people actually paste. A wrong path is the most
+    common cause of HTTP 404: 'https://api.groq.com' (no /openai/v1), a URL that
+    already ends in /chat/completions, or Anthropic's with an extra /v1."""
+    from urllib.parse import urlparse
+    u = (url or "").strip().rstrip("/")
+    if not u:
+        return u
+    if "://" not in u:
+        u = "https://" + u
+    for tail in ("/chat/completions", "/completions", "/messages", "/api/chat", "/models"):
+        if u.endswith(tail):
+            u = u[: -len(tail)]
+    u = u.rstrip("/")
+    host, path = urlparse(u).netloc.lower(), urlparse(u).path
+    if kind == "openai_compat" and path in ("", "/"):
+        u += _DEFAULT_PATH.get(host, "/v1" if not host.startswith(("localhost", "127.")) else "/v1")
+    elif kind == "anthropic" and u.endswith("/v1"):
+        u = u[:-3]
+    elif kind == "ollama":
+        for tail in ("/v1", "/api"):
+            if u.endswith(tail):
+                u = u[: -len(tail)]
+    return u
+
+
 def classify_exception(e: Exception) -> AIError:
     import requests
     if isinstance(e, AIError):
@@ -135,5 +166,12 @@ class Adapter:
                 body = resp.text
             finally:
                 resp.close()
-            raise classify_http(resp.status_code, body, resp.headers.get("retry-after"))
+            err = classify_http(resp.status_code, body, resp.headers.get("retry-after"))
+            if err.kind == "not_found":
+                from urllib.parse import urlparse
+                err = AIError("not_found", f"{err} — either the model name is not offered by "
+                              f"this provider or the base URL path is wrong (tried {urlparse(url).path}). "
+                              f"Settings → AI providers → 'Auto-fix models' repairs this.",
+                              status=404)
+            raise err
         return resp

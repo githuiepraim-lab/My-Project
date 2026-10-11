@@ -16,7 +16,8 @@ class OpenAICompatAdapter(Adapter):
 
     @property
     def base(self) -> str:
-        return str(self.cfg.get("base_url") or "https://api.openai.com/v1").rstrip("/")
+        from .base import normalize_base
+        return normalize_base(self.kind, str(self.cfg.get("base_url") or "https://api.openai.com/v1"))
 
     def _headers(self) -> dict:
         h = {"Content-Type": "application/json"}

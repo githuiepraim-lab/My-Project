@@ -63,7 +63,7 @@ class AISettingsDialog(QDialog):
 
         row = QHBoxLayout()
         for text, fn in (("Set key…", self._set_key), ("Fetch models", self._fetch),
-                         ("Test", self._test), ("Add provider…", self._add),
+                         ("Test", self._test), ("Auto-fix models", self._autofix), ("Add provider…", self._add),
                          ("Remove", self._remove)):
             b = QPushButton(text)
             b.clicked.connect(fn)
@@ -244,6 +244,16 @@ class AISettingsDialog(QDialog):
             return (f"{name}: {r.text!r} in {r.latency:.2f}s, {r.usage.input}+{r.usage.output} tokens"
                     if r.ok else f"{name}: {r.error}")
         self._work(fn, f"Testing {name}")
+
+    def _autofix(self) -> None:
+        name = self._name()
+        if not name:
+            return self._say("Select a provider first.")
+        self._save()
+        from .autofix import autofix_models
+        def fn():
+            return autofix_models(self.hub, name)
+        self._work(fn, f"Repairing {name}")
 
     def _add(self) -> None:
         name, ok = QInputDialog.getText(self, "Add provider", "Short name (letters/digits):")

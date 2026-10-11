@@ -14,7 +14,8 @@ class OllamaAdapter(Adapter):
 
     @property
     def base(self) -> str:
-        return str(self.cfg.get("base_url") or "http://localhost:11434").rstrip("/")
+        from .base import normalize_base
+        return normalize_base(self.kind, str(self.cfg.get("base_url") or "http://localhost:11434"))
 
     def _payload(self, req: Request, model: ModelSpec, stream: bool) -> dict:
         msgs = []

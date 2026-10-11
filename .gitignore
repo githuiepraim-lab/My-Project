@@ -56,3 +56,4 @@ screenshots/
 # ── AI usage / eval logs ──
 logs/
 evals/results/
+proposals/
