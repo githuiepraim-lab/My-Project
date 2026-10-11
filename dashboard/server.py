@@ -516,6 +516,21 @@ class DashboardServer:
     def set_wake_callback(self, fn) -> None:
         self._wake_callback = fn
 
+    def set_file_callback(self, cb) -> None:
+        """cb(path) is called after a phone upload has been fully written. Without
+        this the file was saved and shown on the phone, but the desktop app (and so
+        the assistant) never heard about it."""
+        self._file_callback = cb
+
+    def _notify_file(self, dest) -> None:
+        cb = getattr(self, "_file_callback", None)
+        if cb is None:
+            return
+        try:
+            cb(str(dest))
+        except Exception as e:                       # an app-side problem must not fail the upload
+            print(f"[Dashboard] file callback failed: {e}")
+
     def set_connect_callback(self, fn) -> None:
         self._connect_callback = fn
 
@@ -764,6 +779,7 @@ class DashboardServer:
                         pass
                     return JSONResponse({"error": str(exc)}, status_code=500)
 
+                self._notify_file(dest)
                 asyncio.create_task(self.broadcast({
                     "type": "file_received",
                     "name": dest.name,

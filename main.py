@@ -2038,6 +2038,11 @@ class JarvisLive:
                 except asyncio.QueueFull:
                     pass
 
+    def _on_phone_file(self, path: str) -> None:
+        """A file arrived from the phone: load it exactly as if it had been dropped
+        on the desktop, so the assistant is told and can act on it."""
+        self.ui.receive_remote_file(path)
+
     def _on_phone_connected(self) -> None:
         self.ui.write_log("SYS: Phone connected via Remote Dashboard.")
         self.ui.notify_phone_connected()
@@ -2129,6 +2134,7 @@ class JarvisLive:
             from dashboard.server import DashboardServer
             self._dashboard = DashboardServer()
             self._dashboard.set_connect_callback(self._on_phone_connected)
+            self._dashboard.set_file_callback(self._on_phone_file)
             asyncio.create_task(self._dashboard.serve())
             # Runs for the whole lifetime, not just inside an active session
             asyncio.create_task(self._process_dashboard_commands())
@@ -2367,6 +2373,7 @@ def main():
     ui = JarvisUI("face.png")
     # --pet / --pet-only come from the desktop shortcut; otherwise the pet starts
     # only if it was left switched on.
+    ui.start_jobs()
     if "--pet" in sys.argv or "--pet-only" in sys.argv:
         ui.start_pet(only="--pet-only" in sys.argv)
     else:

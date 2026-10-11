@@ -2943,6 +2943,8 @@ class MainWindow(QMainWindow):
     _log_sig        = pyqtSignal(str)
     _say_sig        = pyqtSignal(str)       # what the assistant just said (face + pet react)
     _file_sig       = pyqtSignal(str, str)  # a file to show in the FILES panel (path, note)
+    _remote_file_sig = pyqtSignal(str)      # a file uploaded from the phone
+    _job_sig        = pyqtSignal(str, int)  # (event, job id) from the background job runner
     _state_sig      = pyqtSignal(str)
     _content_sig    = pyqtSignal(str, str)   # (title, text) — thread-safe content display
     _reconfig_sig   = pyqtSignal()           # trigger setup overlay from any thread
@@ -3228,6 +3230,8 @@ class MainWindow(QMainWindow):
         self._log_sig.connect(self._log.append_log)
         self._say_sig.connect(self._on_say)
         self._file_sig.connect(self._on_file)
+        self._remote_file_sig.connect(self._on_remote_file)
+        self._job_sig.connect(self._on_job_event)
         self._state_sig.connect(self._apply_state)
         self._content_sig.connect(self._show_content)
         self._reconfig_sig.connect(self._show_setup)
@@ -4330,6 +4334,10 @@ class MainWindow(QMainWindow):
         self._avatar_btn.clicked.connect(self._toggle_avatar_style)
         self._refresh_avatar_btn()
 
+        self._jobs_btn = _row(QPushButton("📋  JOBS"))
+        self._jobs_btn.clicked.connect(self._toggle_jobs)
+        self._jobs_btn.setStyleSheet(self._avatar_btn.styleSheet())
+
         self._files_btn = _row(QPushButton("📎  FILES"))
         self._files_btn.clicked.connect(self._toggle_files)
         self._files_btn.setStyleSheet(self._avatar_btn.styleSheet())
@@ -5242,6 +5250,73 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self._log.append_log(f"SYS: Could not share that file ({type(e).__name__}: {str(e)[:90]}).")
 
+    def _on_remote_file(self, path: str):
+        """Qt thread: a phone upload. Same route as a desktop drop (sets the current
+        file and tells the assistant), plus a card in the FILES panel."""
+        try:
+            self._log.append_log(f"SYS: 📱 Received from your phone: {Path(path).name}")
+            self._drop_zone._set_file(path)
+            self._on_file(path, "Uploaded from your phone")
+        except Exception as e:
+            self._log.append_log(f"SYS: Could not open the phone upload ({type(e).__name__}: {str(e)[:80]}).")
+
+    # ── job queue ───────────────────────────────────────────────────────────
+    def _ensure_jobs_panel(self):
+        if getattr(self, "_jobs_dock", None) is None:
+            from PyQt6.QtWidgets import QDockWidget
+            from core.jobs import Notifier
+            from core.jobs_panel import JobsPanel
+            self._jobs_panel = JobsPanel(notifier=Notifier.from_config(),
+                                         open_file=lambda p, n="": self._on_file(p, n))
+            self._jobs_panel.status.connect(self._log.append_log)
+            self._jobs_panel.countChanged.connect(
+                lambda n: self._jobs_btn.setText(f"📋  JOBS ({n})" if n else "📋  JOBS"))
+            self._jobs_dock = QDockWidget("JOBS", self)
+            self._jobs_dock.setWidget(self._jobs_panel)
+            self._jobs_dock.setAllowedAreas(Qt.DockWidgetArea.RightDockWidgetArea)
+            self._jobs_dock.setFloating(True)
+            self._jobs_dock.resize(640, 560)
+            self._jobs_dock.hide()
+        return self._jobs_panel
+
+    def _toggle_jobs(self):
+        self._ensure_jobs_panel()
+        if self._jobs_dock.isVisible():
+            self._jobs_dock.hide()
+        else:
+            self._jobs_dock.show()
+            self._jobs_dock.raise_()
+
+    def start_jobs(self):
+        """Start the background runner (due jobs, including ones missed while the computer was off)."""
+        from core.jobs import JobRunner, JobStore, Notifier
+        if getattr(self, "_job_runner", None) is not None:
+            return
+        self._job_store = JobStore()
+        self._job_runner = JobRunner(self._job_store, notifier=Notifier.from_config(),
+                                     on_event=lambda kind, job: self._job_sig.emit(kind, int(job["id"])))
+        self._job_runner.start()
+        self._ensure_jobs_panel()
+
+    def _on_job_event(self, kind: str, jid: int):
+        """Qt thread: tell the user in the chat, refresh the panel, show any file produced."""
+        try:
+            j = self._job_store.get(jid)
+            if j is None:
+                return
+            title = j["title"][:50]
+            msg = {"started": f"SYS: ▶ Job #{jid} started: {title}",
+                   "done": f"SYS: ✅ Job #{jid} finished: {title}",
+                   "failed": f"SYS: ❌ Job #{jid} failed: {title} ({(j.get('error') or '')[:80]})",
+                   "retry": f"SYS: ↻ Job #{jid} hit a problem and will retry in 5 minutes."}.get(kind)
+            if msg:
+                self._log.append_log(msg)
+            if kind == "done" and j.get("file"):
+                self._on_file(j["file"], f"Result of job #{jid}")
+            self._ensure_jobs_panel().refresh()
+        except Exception as e:
+            self._log.append_log(f"SYS: Job update failed ({type(e).__name__}).")
+
     def _toggle_files(self):
         self._ensure_files_panel()
         if self._files_dock.isVisible():
@@ -5269,7 +5344,9 @@ class MainWindow(QMainWindow):
             self._pet = DesktopPet(kind, speaking_probe=lambda: bool(getattr(self.hud, "speaking", False)))
             self._pet.clicked.connect(lambda: (self.raise_(), self.activateWindow()))
         self._pet.show()
+        self._pet.raise_()
         self._pet.say("Hi! I'm here. Click me any time.", 4)
+        self._log.append_log("SYS: 🐾 Your desktop pet is on — drag it, right-click to change animal or hide it.")
         if only:
             self.showMinimized()
 
@@ -5916,6 +5993,17 @@ class JarvisUI:
     def write_log(self, text: str):
         self._win._log_sig.emit(text)
 
+    def start_jobs(self):
+        """Start the job runner (safe to call once at launch)."""
+        try:
+            self._win.start_jobs()
+        except Exception as e:
+            self._win._log_sig.emit(f"SYS: The job queue could not start ({type(e).__name__}: {str(e)[:90]}).")
+
+    def receive_remote_file(self, path: str):
+        """Thread-safe: a file uploaded from the phone."""
+        self._win._remote_file_sig.emit(str(path))
+
     def share_file(self, path: str, note: str = ""):
         """Thread-safe: show a file as a card in the FILES panel (view / download)."""
         self._win._file_sig.emit(str(path), note)
@@ -5925,13 +6013,17 @@ class JarvisUI:
         self._win._say_sig.emit(text)
 
     def start_pet(self, only: bool = False, force: bool = True):
-        """Show the desktop pet. With force=False it starts only if it was left on."""
-        if not force:
-            from memory.config_manager import load_api_keys
-            if not load_api_keys().get("pet_enabled"):
-                return
-        self._win.start_pet(only)
-        self._win._refresh_pet_btn()
+        """Show the desktop pet. It is ON by default; force=False only skips it if you
+        switched it off. A failure is reported in the chat, never swallowed."""
+        try:
+            if not force:
+                from memory.config_manager import load_api_keys
+                if load_api_keys().get("pet_enabled") is False:
+                    return
+            self._win.start_pet(only)
+            self._win._refresh_pet_btn()
+        except Exception as e:
+            self._win._log_sig.emit(f"SYS: The desktop pet could not start ({type(e).__name__}: {str(e)[:90]}).")
 
     def wait_for_api_key(self):
         while not self._win._ready:

@@ -120,3 +120,33 @@ Anything the assistant produces for you appears as a card in a **📎 FILES** wi
 **An 11-lesson Python course with checked exercises:** variables, strings, numbers, decisions, loops, lists, dictionaries, functions, error handling, FizzBuzz, Fibonacci. Say *"teach me to code"*: the assistant explains the idea with a small example, creates a starter file in `Documents/Ephraim Code` (opened in your editor; never overwritten once you start), you write the function, then say *"check my code"* — it runs your file against tests and names the exact failing case (`area(3, 4) should give 12 but gave 7`). *"Hint"* gives three escalating steps. Progress is remembered (*"how am I doing?"*). Every lesson's reference solution is tested to pass and every starter to fail, so the course itself is verified.
 **Help with your own code:** *explain* (plain language), *debug* (give it the error), *review* (mentor-style tips) on a file or pasted code. API keys inside the code are scrubbed before anything is sent to a model, and the code is treated as untrusted text. **Run** executes a file only after your on-screen confirm.
 **Isolation:** your code runs in a separate Python process (`-I`), in an empty temp folder, with a time limit, no inherited environment variables, and memory/CPU limits on Linux/macOS. That limits accidents; it is not a security sandbox, so only run code you trust. To have code written *for* you, the existing `code_helper` tool does that; this one teaches you to write it.
+
+## Job queue — assign tasks with a time, get a Telegram message
+Open **⚙ CONTROLS → 📋 JOBS**, type a task with a time, press Enter. The line under the box shows how the time was understood before you add it. Or say it: *"every weekday at 7am write my Python study plan"*, *"remind me at 5pm to submit the report"*, *"summarise this week's forex lessons as a PDF tomorrow 8am"* (voice tool `job_queue`). Understood times: `now`, `in 2 hours`, `at 5pm`, `tomorrow 8am`, `tonight`, `on friday at 6:30pm`, `2026-10-20 14:00`, `every day / weekday / monday`, `every 30 minutes`. No time = run right away. Every job reports to your Telegram when **queued**, **done** (with the result, and a PDF attached if long) and **failed**.
+**What a job can do:** write something with an AI (optionally as a PDF), remind you, or cut a video clip with ffmpeg (`clip`). Transient failures retry up to 3 times, 5 minutes apart; bad input fails at once. A job that was due while the computer was off runs when the app next starts and says so; a repeating job queues **one** next run, never a pile of catch-ups. Phone-assigned and app-assigned jobs share one queue (`memory/jobs.db`).
+**Not built, on purpose:** automated **trading** (placing orders with real money is not something to hand to an unattended script; a job can still write market-education notes or review a trading journal you give it, but it has no live prices or news — it has no internet access and says so), **attending online meetings**, **generating AI videos and uploading to YouTube/TikTok** (needs video-generation and platform OAuth integrations that I could not build or test here), and **operating your desktop**. Those would be separate projects.
+### Running while your laptop is OFF
+A laptop that is off runs nothing, so the same queue runs as a **headless worker on a machine that stays on** (spare PC, Raspberry Pi, a small always-on cloud VM):
+```
+python -m core.worker --telegram     # runs due jobs AND accepts tasks you message to your Telegram bot
+python -m core.worker --once         # run what is due, then exit (for cron)
+```
+Message your bot from your phone: `write a study plan for Python tomorrow 7am` → `📋 Queued #4`. Also `/jobs`, `/result 4`, `/cancel 4`, `/run 4`. **Only your own chat id is obeyed**; anyone else messaging the bot is ignored. The worker needs the same `config/` (AI provider keys, Telegram token and `telegram_chat_id`; see `report_sender` setup). Example `systemd` unit:
+```
+[Unit]
+Description=Ephraim job worker
+After=network-online.target
+[Service]
+WorkingDirectory=/home/pi/My-Project
+ExecStart=/usr/bin/python3 -m core.worker --telegram
+Restart=always
+[Install]
+WantedBy=multi-user.target
+```
+![jobs](images/jobs_panel.png)
+
+## Fixes in this round
+* **Provider failover:** when one provider was down, its extra models used up the retry budget before the next provider got a turn. A dead host or bad key now skips that provider's other models at once (found by the new end-to-end HTTP tests, 17 of them against local OpenAI-, Anthropic- and Ollama-style servers).
+* **Phone uploads were invisible to the assistant:** the server saved the file and told the phone's web page, but nothing told the desktop app. An upload now loads exactly like a desktop drop (the assistant is told, it becomes the current file, and it appears in FILES). Tested through the real FastAPI route.
+* **Desktop pet never appeared:** it only started if it had been explicitly switched on, so a fresh install never showed it. It is now on by default (turn it off with 🐾 DESKTOP PET) and any startup failure is shown in the chat.
+* **Headless PDF crash:** creating a PDF with no Qt application object aborts the process; the worker would have died on its first report. Fixed and regression-tested.

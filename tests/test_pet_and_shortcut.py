@@ -133,3 +133,26 @@ def test_jarvisui_say_emits_the_signal():
     fake = types.SimpleNamespace(_win=types.SimpleNamespace(_say_sig=types.SimpleNamespace(emit=got.append)))
     ui.JarvisUI.say(fake, "hello")
     assert got == ["hello"]
+
+
+def test_pet_starts_by_default_and_only_stays_off_if_you_turned_it_off(monkeypatch):
+    ui = pytest.importorskip("ui")
+    import memory.config_manager as cm
+    started = []
+    fake = types.SimpleNamespace(_win=types.SimpleNamespace(start_pet=lambda only: started.append(only),
+                                                            _refresh_pet_btn=lambda: None, _log_sig=types.SimpleNamespace(emit=lambda m: None)))
+    monkeypatch.setattr(cm, "load_api_keys", lambda: {})                       # never configured -> ON
+    ui.JarvisUI.start_pet(fake, force=False)
+    monkeypatch.setattr(cm, "load_api_keys", lambda: {"pet_enabled": False})   # the user switched it off -> stays off
+    ui.JarvisUI.start_pet(fake, force=False)
+    assert started == [False]
+
+
+def test_a_pet_failure_is_shown_in_the_chat_not_swallowed():
+    ui = pytest.importorskip("ui")
+    log = []
+    def boom(only): raise RuntimeError("no display")
+    fake = types.SimpleNamespace(_win=types.SimpleNamespace(start_pet=boom, _refresh_pet_btn=lambda: None,
+                                                            _log_sig=types.SimpleNamespace(emit=log.append)))
+    ui.JarvisUI.start_pet(fake)
+    assert "desktop pet could not start" in log[0] and "no display" in log[0]

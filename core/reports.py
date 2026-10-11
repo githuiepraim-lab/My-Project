@@ -19,9 +19,24 @@ _VIDEO = {".mp4", ".mov", ".mkv", ".avi", ".webm"}
 OUT_DIR = Path.home() / "Documents" / "Ephraim Reports"
 
 
+_APP = None
+
+
+def _ensure_qt_app() -> None:
+    """Qt's text layout needs an application object. The desktop app has one; a headless
+    worker does not, and without it Qt aborts the whole process instead of raising."""
+    global _APP
+    from PyQt6.QtGui import QGuiApplication
+    if QGuiApplication.instance() is None:
+        import os
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        _APP = QGuiApplication([])
+
+
 def make_pdf(title: str, body: str, images: list[str] | None = None, out: str | None = None) -> str:
     """Render a titled report (plain text with blank-line paragraphs, optional
     images) to PDF with Qt's own writer — no extra dependency."""
+    _ensure_qt_app()
     from PyQt6.QtCore import QMarginsF, QSizeF
     from PyQt6.QtGui import QPageLayout, QPageSize, QPdfWriter, QTextDocument
     path = Path(out) if out else OUT_DIR / (

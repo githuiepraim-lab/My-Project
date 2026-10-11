@@ -232,10 +232,13 @@ class Hub:
         deadline = self._clock() + float(s.get("deadline_s", 45))
         attempts: list[dict] = []
         last: AIError | None = None
+        down: set[str] = set()        # providers that failed for a reason no other model of theirs can fix
 
         for spec in candidates:
             if len(attempts) >= max_attempts or self._clock() > deadline:
                 break
+            if spec.provider in down:
+                continue
             if req.cancel:
                 req.cancel.raise_if_cancelled()
             prepared = self._prepare(req, spec)
@@ -252,6 +255,15 @@ class Hub:
                     self._record(spec, prepared, None, lat, e.kind)
                     if e.kind == "cancelled":
                         raise
+                    if e.kind == "auth" or (e.kind == "network" and retry == 1):
+                        # A bad key or an unreachable host fails for EVERY model of this
+                        # provider. Stop spending attempts on its siblings and let the
+                        # next provider have them (they also start out cooled down).
+                        down.add(spec.provider)
+                        for sib in self.models():
+                            if sib.provider == spec.provider and sib.key != spec.key:
+                                self.health.failure(sib.key, e)
+                        break
                     can_retry = (retry == 0 and e.kind in ("timeout", "network", "unavailable")
                                  and e.kind != "rate_limit")
                     wait = random.uniform(0.3, 0.7)
@@ -295,7 +307,11 @@ class Hub:
         s = self.settings
         limit = int(s.get("max_attempts", 4)) if s.get("fallback", True) else 1
         last: AIError | None = None
-        for spec in candidates[:limit]:
+        down: set[str] = set()
+        tried = 0
+        for spec in candidates:
+            if len(down) and spec.provider in down:
+                continue
             if req.cancel:
                 req.cancel.raise_if_cancelled()
             prepared = self._prepare(req, spec)
@@ -324,6 +340,11 @@ class Hub:
                 self._record(spec, prepared, None, self._clock() - t0, e.kind)
                 if e.kind == "cancelled" or emitted:
                     raise
+                if e.kind in ("auth", "network"):
+                    down.add(spec.provider)
+                tried += 1
+                if tried >= limit:
+                    break
         raise last or AIError("unavailable", "no attempt was made")
 
     def submit(self, prompt, **kw) -> Job:
