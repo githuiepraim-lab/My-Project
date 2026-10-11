@@ -49,13 +49,34 @@ def _deliver(channel: str, files: list[Path], caption: str, to: str, zip_it: boo
     return reports.send_telegram(token, chat, files, caption)
 
 
+def _share(player, path: str, note: str = "") -> bool:
+    """Put the file in the app's FILES panel (view / download). False if there is no UI."""
+    fn = getattr(player, "share_file", None)
+    if fn is None:
+        return False
+    fn(path, note)
+    return True
+
+
 def report_sender(parameters: dict, player=None) -> str:
     mode = str(parameters.get("mode", "make_pdf")).lower()
     try:
         if mode == "make_pdf":
             path = reports.make_pdf(str(parameters.get("title", "Report")),
                                     str(parameters.get("body", "")), _split(parameters.get("files")))
-            return f"Report saved: {path}"
+            shown = _share(player, path, str(parameters.get("title", "")))
+            return (f"Your report is ready — it is in the FILES panel, where you can view or download it. ({path})"
+                    if shown else f"Report saved: {path}")
+        if mode == "share":
+            files = reports.check_files(_split(parameters.get("files")))
+            from core.files_panel import is_sensitive
+            ok = [f for f in files if not is_sensitive(f)]
+            if not ok:
+                return "Sir, those look like credential files; I will not put them in the shared panel."
+            for f in ok:
+                if not _share(player, str(f), str(parameters.get("caption", ""))):
+                    return "The FILES panel is not available here."
+            return f"Shared {len(ok)} file(s) in the FILES panel — view or download them there."
         if mode == "send":
             channel = "email" if str(parameters.get("channel", "telegram")).lower() == "email" else "telegram"
             files = reports.check_files(_split(parameters.get("files")))
@@ -81,7 +102,7 @@ def report_sender(parameters: dict, player=None) -> str:
                     pass
             return (f"Video call room opened: {url}.{note} Note: I can talk with you here through "
                     f"the camera view; I cannot join the call itself as a participant.")
-        return "Modes: make_pdf, send (asks you to confirm), call."
+        return "Modes: make_pdf, share (show files in the chat panel), send (asks you to confirm), call."
     except ValueError as e:
         return f"Sir, I cannot send that: {e}."
     except Exception as e:
@@ -91,13 +112,14 @@ def report_sender(parameters: dict, player=None) -> str:
 TOOL = {
     "name": "report_sender",
     "description": (
-        "Make a PDF report from text; send files (PDF, photos, videos, zip) to the user's phone "
+        "Make a PDF report from text (it appears in the app's FILES panel to view/download); share any existing file(s) "
+        "there; send files (PDF, photos, videos, zip) to the user's phone "
         "(Telegram) or e-mail — the user must confirm on screen; start a video call link. "
-        "mode: make_pdf (title, body, files=images) | send (files, channel telegram|email, caption, to, zip) | call."),
+        "mode: make_pdf (title, body, files=images) | share (files, caption) | send (files, channel telegram|email, caption, to, zip) | call."),
     "parameters": {
         "type": "OBJECT",
         "properties": {
-            "mode": {"type": "STRING", "description": "make_pdf | send | call"},
+            "mode": {"type": "STRING", "description": "make_pdf | share | send | call"},
             "title": {"type": "STRING"}, "body": {"type": "STRING"},
             "files": {"type": "STRING", "description": "comma-separated file paths"},
             "channel": {"type": "STRING", "description": "telegram or email"},

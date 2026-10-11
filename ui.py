@@ -2942,6 +2942,7 @@ class RemoteKeyOverlay(QWidget):
 class MainWindow(QMainWindow):
     _log_sig        = pyqtSignal(str)
     _say_sig        = pyqtSignal(str)       # what the assistant just said (face + pet react)
+    _file_sig       = pyqtSignal(str, str)  # a file to show in the FILES panel (path, note)
     _state_sig      = pyqtSignal(str)
     _content_sig    = pyqtSignal(str, str)   # (title, text) — thread-safe content display
     _reconfig_sig   = pyqtSignal()           # trigger setup overlay from any thread
@@ -3226,6 +3227,7 @@ class MainWindow(QMainWindow):
 
         self._log_sig.connect(self._log.append_log)
         self._say_sig.connect(self._on_say)
+        self._file_sig.connect(self._on_file)
         self._state_sig.connect(self._apply_state)
         self._content_sig.connect(self._show_content)
         self._reconfig_sig.connect(self._show_setup)
@@ -4328,6 +4330,10 @@ class MainWindow(QMainWindow):
         self._avatar_btn.clicked.connect(self._toggle_avatar_style)
         self._refresh_avatar_btn()
 
+        self._files_btn = _row(QPushButton("📎  FILES"))
+        self._files_btn.clicked.connect(self._toggle_files)
+        self._files_btn.setStyleSheet(self._avatar_btn.styleSheet())
+
         self._pet_btn = _row(QPushButton())
         self._pet_btn.clicked.connect(self._toggle_pet)
         self._shortcut_btn = _row(QPushButton("🖥  CREATE DESKTOP SHORTCUT"))
@@ -5205,6 +5211,45 @@ class MainWindow(QMainWindow):
         self._log.append_log("SYS: Face switched to the realistic head." if want == "real"
                              else "SYS: Face switched to the hologram.")
 
+    # ── shared files (reports, videos, zips) ────────────────────────────────
+    def _ensure_files_panel(self):
+        if getattr(self, "_files_dock", None) is None:
+            from PyQt6.QtWidgets import QDockWidget
+            from core.files_panel import FilesPanel
+            self._files_panel = FilesPanel()
+            self._files_panel.status.connect(self._log.append_log)
+            self._files_panel.countChanged.connect(
+                lambda n: self._files_btn.setText(f"📎  FILES ({n})" if n else "📎  FILES"))
+            self._files_dock = QDockWidget("FILES", self)
+            self._files_dock.setWidget(self._files_panel)
+            self._files_dock.setAllowedAreas(Qt.DockWidgetArea.RightDockWidgetArea)
+            self._files_dock.setFloating(True)            # a window of its own: the HUD layout is untouched
+            self._files_dock.resize(400, 560)
+            self._files_dock.hide()
+            n = self._files_panel.count()
+            if n:
+                self._files_btn.setText(f"📎  FILES ({n})")
+        return self._files_panel
+
+    def _on_file(self, path: str, note: str):
+        """Qt thread: a file arrived. Add its card, open the panel, say so in the chat."""
+        try:
+            panel = self._ensure_files_panel()
+            row = panel.add(path, note)
+            self._files_dock.show()
+            self._files_dock.raise_()
+            self._log.append_log(f"SYS: 📎 {row['name']} is ready — view or download it in the FILES panel.")
+        except Exception as e:
+            self._log.append_log(f"SYS: Could not share that file ({type(e).__name__}: {str(e)[:90]}).")
+
+    def _toggle_files(self):
+        self._ensure_files_panel()
+        if self._files_dock.isVisible():
+            self._files_dock.hide()
+        else:
+            self._files_dock.show()
+            self._files_dock.raise_()
+
     # ── desktop pet ─────────────────────────────────────────────────────────
     def _on_say(self, text: str):
         """Runs on the Qt thread: the face reacts and the pet speaks."""
@@ -5870,6 +5915,10 @@ class JarvisUI:
 
     def write_log(self, text: str):
         self._win._log_sig.emit(text)
+
+    def share_file(self, path: str, note: str = ""):
+        """Thread-safe: show a file as a card in the FILES panel (view / download)."""
+        self._win._file_sig.emit(str(path), note)
 
     def say(self, text: str):
         """Thread-safe: the face reacts to, and the pet speaks, what was just said."""

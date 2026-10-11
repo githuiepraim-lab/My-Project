@@ -32,9 +32,13 @@ def make_pdf(title: str, body: str, images: list[str] | None = None, out: str | 
     imgs = "".join(f'<p><img src="{Path(i).resolve().as_uri()}" width="480"></p>'
                    for i in (images or []) if Path(i).suffix.lower() in _PHOTO and Path(i).exists())
     doc = QTextDocument()
+    from PyQt6.QtGui import QFont
+    doc.setDefaultFont(QFont("Arial", 11))
+    doc.setDocumentMargin(0)
     doc.setHtml(f"<h1 style='color:#0b3a4a'>{html.escape(title)}</h1>"
                 f"<p style='color:#777'>{__import__('time').strftime('%d %B %Y, %H:%M')}</p>{paras}{imgs}")
     w = QPdfWriter(str(path))
+    w.setResolution(96)                 # so 11 pt text is 11 pt, not a tenth of it
     w.setPageSize(QPageSize(QPageSize.PageSizeId.A4))
     w.setPageMargins(QMarginsF(18, 18, 18, 18), QPageLayout.Unit.Millimeter)
     doc.print(w)
