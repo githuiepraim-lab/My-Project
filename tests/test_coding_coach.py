@@ -110,6 +110,8 @@ def test_editor_open_never_uses_the_run_verb(monkeypatch, tmp_path):
     monkeypatch.setattr(cc.subprocess, "Popen", lambda cmd, **k: calls.append(cmd))
     monkeypatch.setattr(cc.shutil, "which", lambda n: None)
     monkeypatch.setattr(cc.os, "name", "nt")
+    import memory.config_manager as cm
+    monkeypatch.setattr(cm, "load_api_keys", lambda: {"code_external_editor": True})
     assert open_in_editor(tmp_path / "x.py") and calls[0][0] == "notepad.exe"    # not os.startfile (would execute it)
 
 
@@ -118,13 +120,13 @@ def test_editor_open_never_uses_the_run_verb(monkeypatch, tmp_path):
 def tool(monkeypatch, coach):
     import actions.coding_coach as ac
     monkeypatch.setattr(ac, "Coach", lambda: coach)
-    monkeypatch.setattr(ac, "open_in_editor", lambda p: True)
     return ac
 
 
 def test_tool_lesson_check_flow(tool, coach):
-    out = tool.coding_coach({"mode": "lesson", "lesson": "1"})
-    assert "Lesson 1/11" in out and "area(width, height)" in out and "opened it in your editor" in out
+    pl = type("P", (), {"show_code": lambda self, paths: None})()
+    out = tool.coding_coach({"mode": "lesson", "lesson": "1"}, pl)
+    assert "Lesson 1/11" in out and "area(width, height)" in out and "code preview" in out
     coach.path_for(BY_ID["variables"]).write_text(BY_ID["variables"].solution)
     assert "complete" in tool.coding_coach({"mode": "check"})
     assert "Lesson 2/11" in tool.coding_coach({"mode": "next"})

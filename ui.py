@@ -2945,6 +2945,7 @@ class MainWindow(QMainWindow):
     _file_sig       = pyqtSignal(str, str)  # a file to show in the FILES panel (path, note)
     _remote_file_sig = pyqtSignal(str)      # a file uploaded from the phone
     _job_sig        = pyqtSignal(str, int)  # (event, job id) from the background job runner
+    _code_sig       = pyqtSignal(str)       # JSON: files or text to show in the code preview
     _state_sig      = pyqtSignal(str)
     _content_sig    = pyqtSignal(str, str)   # (title, text) — thread-safe content display
     _reconfig_sig   = pyqtSignal()           # trigger setup overlay from any thread
@@ -3232,6 +3233,7 @@ class MainWindow(QMainWindow):
         self._file_sig.connect(self._on_file)
         self._remote_file_sig.connect(self._on_remote_file)
         self._job_sig.connect(self._on_job_event)
+        self._code_sig.connect(self._on_show_code)
         self._state_sig.connect(self._apply_state)
         self._content_sig.connect(self._show_content)
         self._reconfig_sig.connect(self._show_setup)
@@ -4334,6 +4336,10 @@ class MainWindow(QMainWindow):
         self._avatar_btn.clicked.connect(self._toggle_avatar_style)
         self._refresh_avatar_btn()
 
+        self._code_btn = _row(QPushButton("💻  CODE PREVIEW"))
+        self._code_btn.clicked.connect(lambda: self._on_show_code("{}"))
+        self._code_btn.setStyleSheet(self._avatar_btn.styleSheet())
+
         self._jobs_btn = _row(QPushButton("📋  JOBS"))
         self._jobs_btn.clicked.connect(self._toggle_jobs)
         self._jobs_btn.setStyleSheet(self._avatar_btn.styleSheet())
@@ -5260,6 +5266,23 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self._log.append_log(f"SYS: Could not open the phone upload ({type(e).__name__}: {str(e)[:80]}).")
 
+    # ── code preview (the app's own viewer; nothing opens in VS Code) ────────
+    def _on_show_code(self, payload: str):
+        import json as _json
+        try:
+            from core.code_view import CodeViewer
+            if getattr(self, "_code_viewer", None) is None:
+                self._code_viewer = CodeViewer()
+            d = _json.loads(payload or "{}")
+            for pth in d.get("paths", []):
+                self._code_viewer.open_file(pth)
+            if d.get("text") is not None:
+                self._code_viewer.open_text(d.get("title", "code"), d["text"], d.get("lang", "text"))
+            if not d.get("paths") and d.get("text") is None:
+                self._code_viewer.show(); self._code_viewer.raise_()
+        except Exception as e:
+            self._log.append_log(f"SYS: Code preview failed ({type(e).__name__}: {str(e)[:80]}).")
+
     # ── job queue ───────────────────────────────────────────────────────────
     def _ensure_jobs_panel(self):
         if getattr(self, "_jobs_dock", None) is None:
@@ -5297,6 +5320,16 @@ class MainWindow(QMainWindow):
                                      on_event=lambda kind, job: self._job_sig.emit(kind, int(job["id"])))
         self._job_runner.start()
         self._ensure_jobs_panel()
+        notifier = Notifier.from_config()
+        if notifier.ready:
+            from core import confirm
+            from core.jobs import TelegramPoller
+            self._tg_poller = TelegramPoller(self._job_store, notifier)
+            self._tg_poller.start()
+            # The on-screen confirmation is ALSO offered on your phone (answer within 90 s).
+            confirm.bind_remote(lambda title, detail, token: notifier.send_buttons(
+                f"🔐 Confirm on your computer?\n{title}\n\n{detail[:600]}",
+                [[("✅ Confirm", f"cf:{token}:y"), ("❌ Cancel", f"cf:{token}:n")]]))
 
     def _on_job_event(self, kind: str, jid: int):
         """Qt thread: tell the user in the chat, refresh the panel, show any file produced."""
@@ -5992,6 +6025,16 @@ class JarvisUI:
 
     def write_log(self, text: str):
         self._win._log_sig.emit(text)
+
+    def show_code(self, paths):
+        """Thread-safe: show file(s) in the in-app code preview (live: it follows edits)."""
+        import json as _json
+        self._win._code_sig.emit(_json.dumps({"paths": [str(p) for p in paths]}))
+
+    def show_code_text(self, title: str, text: str, lang: str = "text"):
+        """Thread-safe: show a block of text (e.g. a diff) in the code preview."""
+        import json as _json
+        self._win._code_sig.emit(_json.dumps({"title": title, "text": text, "lang": lang}))
 
     def start_jobs(self):
         """Start the job runner (safe to call once at launch)."""

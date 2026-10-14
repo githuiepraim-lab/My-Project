@@ -185,7 +185,7 @@ def test_new_openai_models_need_max_completion_tokens(tmp_path, servers):
 
 def test_anthropic_roundtrip_headers_system_blocks_and_alternation(tmp_path, servers):
     hub, cfg = build(tmp_path, servers)
-    cfg["providers"]["openai"]["enabled"] = False
+    cfg["providers"]["openai"].update(enabled=False, user_disabled=True)
     r = hub.ask(Request(messages=[{"role": "user", "content": "q1"}, {"role": "user", "content": "q2"}], system="s", max_output_tokens=40))
     assert r.provider == "claude" and r.text == "haiku-x here"
     sent = servers["an"][0].RequestHandlerClass.log[0]
@@ -194,7 +194,7 @@ def test_anthropic_roundtrip_headers_system_blocks_and_alternation(tmp_path, ser
 
 def test_ollama_roundtrip_and_stream(tmp_path, servers):
     hub, cfg = build(tmp_path, servers)
-    cfg["providers"]["openai"]["enabled"] = cfg["providers"]["claude"]["enabled"] = False
+    cfg["providers"]["openai"].update(enabled=False, user_disabled=True); cfg["providers"]["claude"].update(enabled=False, user_disabled=True)
     assert hub.ask(Request(messages=[{"role": "user", "content": "hi"}])).text == "local reply"
     assert "".join(c.text for c in hub.stream(Request(messages=[{"role": "user", "content": "hi"}]))) == "Hello"
 
@@ -203,7 +203,7 @@ def test_ollama_roundtrip_and_stream(tmp_path, servers):
 def test_streaming_every_provider_yields_text_and_real_usage(tmp_path, servers, which):
     hub, cfg = build(tmp_path, servers)
     for n in cfg["providers"]:
-        cfg["providers"][n]["enabled"] = (n == which)
+        cfg["providers"][n].update(enabled=(n == which), user_disabled=(n != which))
     chunks = list(hub.stream(Request(messages=[{"role": "user", "content": "hi"}])))
     assert "".join(c.text for c in chunks).replace("Hi from Claude", "Hello").replace("Hello!", "Hello") == "Hello"
     assert chunks[-1].done and chunks[-1].usage.input > 0
@@ -214,7 +214,7 @@ def test_streaming_every_provider_yields_text_and_real_usage(tmp_path, servers, 
 def test_tool_calling_roundtrip_nonstream_and_stream(tmp_path, servers, which):
     hub, cfg = build(tmp_path, servers)
     for n in cfg["providers"]:
-        cfg["providers"][n]["enabled"] = (n == which)
+        cfg["providers"][n].update(enabled=(n == which), user_disabled=(n != which))
     req = lambda: Request(messages=[{"role": "user", "content": "what is the weather in Nairobi"}], tools=[TOOL])
     r = hub.ask(req())
     assert r.tool_calls == [{"id": r.tool_calls[0]["id"], "name": "get_weather", "arguments": {"city": "Nairobi"}}]
@@ -225,7 +225,7 @@ def test_tool_calling_roundtrip_nonstream_and_stream(tmp_path, servers, which):
 
 def test_image_and_json_mode_reach_the_server_in_the_right_shape(tmp_path, servers):
     hub, cfg = build(tmp_path, servers)
-    cfg["providers"]["claude"]["enabled"] = cfg["providers"]["ollama"]["enabled"] = False
+    cfg["providers"]["claude"].update(enabled=False, user_disabled=True); cfg["providers"]["ollama"].update(enabled=False, user_disabled=True)
     r = hub.ask(Request(messages=[{"role": "user", "content": "what is this"}], images=[Image(b"\x89PNGdata", "image/png")], json_mode=True))
     sent = servers["oa"][0].RequestHandlerClass.log[0]
     assert sent["messages"][-1]["content"][1]["image_url"]["url"].startswith("data:image/png;base64,")
@@ -234,7 +234,7 @@ def test_image_and_json_mode_reach_the_server_in_the_right_shape(tmp_path, serve
 
 def test_404_unknown_model_is_explained_then_autofix_repairs_it(tmp_path, servers, monkeypatch):
     hub, cfg = build(tmp_path, servers)
-    cfg["providers"]["claude"]["enabled"] = cfg["providers"]["ollama"]["enabled"] = False
+    cfg["providers"]["claude"].update(enabled=False, user_disabled=True); cfg["providers"]["ollama"].update(enabled=False, user_disabled=True)
     cfg["providers"]["openai"]["models"] = [{"id": "gpt-imaginary-9", "tier": 1, "caps": ["text", "stream"]}]
     with pytest.raises(AIError) as e:
         hub.ask(Request(messages=[{"role": "user", "content": "hi"}]))
@@ -252,7 +252,7 @@ def test_404_unknown_model_is_explained_then_autofix_repairs_it(tmp_path, server
 
 def test_base_url_pasted_wrong_still_works(tmp_path, servers):
     hub, cfg = build(tmp_path, servers)
-    cfg["providers"]["claude"]["enabled"] = cfg["providers"]["ollama"]["enabled"] = False
+    cfg["providers"]["claude"].update(enabled=False, user_disabled=True); cfg["providers"]["ollama"].update(enabled=False, user_disabled=True)
     for pasted in ("/v1/chat/completions", "/", "/v1/"):
         cfg["providers"]["openai"]["base_url"] = servers["oa"][1] + pasted
         hub.health.reset()
@@ -263,7 +263,7 @@ def test_wrong_key_fails_over_and_the_key_never_leaks(tmp_path, servers):
     hub, cfg = build(tmp_path, servers)
     hub._key = lambda n: "sk-WRONG-KEY-0987654321zzzz" if n == "openai" else ("" if n == "ollama" else KEY)
     r = hub.ask(Request(messages=[{"role": "user", "content": "hi"}]))
-    assert r.provider == "claude" and r.attempts[0] == {"model": "openai/fast-mini", "error": "auth", "cooldown_s": 21600.0}
+    assert r.provider == "claude" and r.attempts[0] == {"model": "openai/fast-mini", "error": "auth", "cooldown_s": 900.0}
     log = (tmp_path / "u.jsonl").read_text()
     assert "WRONG-KEY" not in log and KEY not in log
     st = json.dumps(hub.status())

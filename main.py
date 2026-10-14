@@ -560,6 +560,18 @@ class JarvisLive:
         self._vision_last_time     = 0.0     # monotonic time of last screen_process call (cooldown guard)
         self._vision_busy          = False   # True while a vision capture/inject cycle is in flight
         self._interrupted          = False   # True while draining audio after user interrupt
+        # Adaptive jitter buffer for the voice (core/audio_buffer.py): starts small so a good
+        # connection has no added delay, grows when the speaker actually runs dry.
+        try:
+            from core.audio_buffer import JitterBuffer
+            from memory.config_manager import load_api_keys as _lk
+            _c = _lk()
+            self._jb = JitterBuffer(initial_ms=int(_c.get("audio_buffer_ms", 100)),
+                                    max_ms=int(_c.get("audio_buffer_max_ms", 900)))
+        except Exception:
+            from core.audio_buffer import JitterBuffer
+            self._jb = JitterBuffer()
+        self._jb_note_at = None
         # Transcript-driven mouth shapes for the avatar. Fed from the receive
         # loop as words arrive, drained by the playback loop against the audio.
         self._visemes              = VisemeStream()
@@ -1620,6 +1632,35 @@ class JarvisLive:
             traceback.print_exc()
             raise
 
+    async def _prebuffer(self, first: bytes) -> bytes:
+        """Hold back the start of a stretch of speech until a little audio is queued, so a
+        gap in the network does not leave the speaker with nothing to play."""
+        bps = RECEIVE_SAMPLE_RATE * 2 * CHANNELS
+        parts, size, t0 = [first], len(first), time.monotonic()
+        while True:
+            done = bool(self._turn_done_event and self._turn_done_event.is_set())
+            if self._interrupted or self._jb.ready(size / bps, time.monotonic() - t0, done):
+                break
+            try:
+                nxt = await asyncio.wait_for(self.audio_in_queue.get(), timeout=0.03)
+            except asyncio.TimeoutError:
+                continue
+            parts.append(nxt)
+            size += len(nxt)
+        return b"".join(parts)
+
+    def _note_playback(self, underflowed: bool, seconds: float) -> None:
+        """Learn from each write: a break makes the buffer bigger, a clean stretch smaller."""
+        if not underflowed:
+            self._jb.clean(seconds)
+            return
+        grew = self._jb.underflow()
+        print(f"[JARVIS] 🔊 Speaker ran dry mid-speech — {self._jb.stats()}")
+        now = time.monotonic()
+        if grew and (self._jb_note_at is None or now - self._jb_note_at > 30):
+            self._jb_note_at = now
+            self.ui.write_log("SYS: 🔊 The connection is choppy — buffering a little more audio so speech stays smooth.")
+
     async def _play_audio(self):
         print("[JARVIS] 🔊 Play started")
 
@@ -1681,6 +1722,10 @@ class JarvisLive:
                         self._turn_done_event.clear()
                     continue
 
+                with self._speaking_lock:
+                    _new_stretch = not self._is_speaking
+                if _new_stretch:
+                    chunk = await self._prebuffer(chunk)
                 self.set_speaking(True)
 
                 # Batch all immediately-available chunks into one write to reduce
@@ -1744,9 +1789,13 @@ class JarvisLive:
                     pass
 
                 try:
-                    await asyncio.to_thread(stream.write, bytes(batch))
+                    _under = await asyncio.to_thread(stream.write, bytes(batch))
                 except (RuntimeError, asyncio.CancelledError):
                     break   # executor shutting down — exit cleanly
+                # The first write of a stretch always reports "underflow" (the speaker was idle,
+                # not starved), so only later ones count as a break in the middle of speech.
+                self._note_playback(bool(_under) and not _new_stretch,
+                                    len(batch) / (RECEIVE_SAMPLE_RATE * 2 * CHANNELS))
         except Exception as e:
             print(f"[JARVIS] ❌ Play: {e}")
             raise

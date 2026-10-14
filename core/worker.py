@@ -20,7 +20,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")      # PDF reports use Qt'
 
 
 def main(argv: list[str]) -> int:
-    from core.jobs import JobRunner, JobStore, Notifier, TelegramInbox
+    from core.jobs import JobRunner, JobStore, Notifier, TelegramInbox, touch_worker_lock
     store, notifier = JobStore(), Notifier.from_config()
     log = lambda kind, job: print(f"[{time.strftime('%H:%M:%S')}] job #{job['id']} {kind}: {job['title'][:60]}", flush=True)
     runner = JobRunner(store, notifier=notifier, on_event=log)
@@ -40,6 +40,7 @@ def main(argv: list[str]) -> int:
         return 2
     try:
         while True:
+            touch_worker_lock()                        # tells a desktop app on the same machine to leave Telegram to us
             if inbox:
                 try:
                     inbox.poll_once()

@@ -2,6 +2,7 @@ import subprocess
 import sys
 import json
 import re
+import shutil
 import time
 from pathlib import Path
 
@@ -275,25 +276,37 @@ def _install_dependencies(dependencies: list[str], project_dir: Path) -> str:
         return f"Install error (non-fatal): {e}"
 
 def _open_vscode(project_dir: Path) -> bool:
-    vscode_candidates = [
-        "code",
-        rf"C:\Users\{Path.home().name}\AppData\Local\Programs\Microsoft VS Code\bin\code.cmd",
-        r"C:\Program Files\Microsoft VS Code\bin\code.cmd",
-    ]
-    for cmd in vscode_candidates:
-        try:
-            subprocess.Popen(
-                [cmd, str(project_dir)],
-                shell=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
-            )
-            time.sleep(1.5)
-            print(f"[DevAgent] 💻 VSCode opened: {project_dir}")
-            return True
-        except Exception:
-            continue
-    return False
+    """Optional external editor (config "code_external_editor": true). No shell: the folder
+    name comes from the request, and with shell=True a name like 'x & del *' would run."""
+    try:
+        from memory.config_manager import load_api_keys
+        if not load_api_keys().get("code_external_editor"):
+            return False
+        exe = shutil.which("code")
+        if not exe:
+            return False
+        subprocess.Popen([exe, str(project_dir)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return True
+    except Exception:
+        return False
+
+
+_CODE_EXT = {".py", ".js", ".ts", ".html", ".css", ".json", ".md", ".java", ".c", ".cpp", ".cs", ".go", ".rs", ".sh", ".sql", ".yml", ".yaml"}
+
+
+def _show_project(project_dir: Path, player) -> bool:
+    """Show the project's files in the app's own code preview (entry file first)."""
+    show = getattr(player, "show_code", None)
+    if show is None:
+        return _open_vscode(project_dir)
+    files = [f for f in sorted(Path(project_dir).rglob("*")) if f.is_file() and f.suffix.lower() in _CODE_EXT
+             and not any(x in f.parts for x in ("node_modules", "venv", ".venv", "__pycache__", ".git"))]
+    first = [f for f in files if f.name in ("main.py", "app.py", "index.html", "index.js", "main.js")]
+    ordered = (first + [f for f in files if f not in first])[:8]
+    if ordered:
+        show([str(f) for f in ordered])
+    return bool(ordered)
+
 
 def _run_project(run_command: str, project_dir: Path, timeout: int = 30) -> str:
     print(f"[DevAgent] 🚀 Running: {run_command}")
@@ -522,7 +535,7 @@ def _build_project(
         install_result = _install_dependencies(dependencies, project_dir)
         log(install_result)
 
-    _open_vscode(project_dir)
+    _show_project(project_dir, player)
 
     last_output   = ""
     auto_installs = 0  

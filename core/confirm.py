@@ -53,10 +53,12 @@ class _Pending:
     detail:  str
     run:     Callable[[], str]
     at:      float
+    token:   str = ""
 
 
 _pending: Optional[_Pending] = None
 _lock = threading.Lock()
+_remote_cb: Optional[Callable[[str, str, str], None]] = None   # (title, detail, token) -> sends the request elsewhere
 
 # Set once at startup by main.py. Signature: (title, detail) -> None for show,
 # and () -> None for hide. Both are marshalled onto the Qt thread by the UI.
@@ -79,6 +81,25 @@ def _log(msg: str) -> None:
             pass
 
 
+def bind_remote(cb) -> None:
+    """Also offer each confirmation on another device (Telegram). The on-screen gate stays;
+    whichever of the two answers first wins. The token is random and only valid for this
+    one request, so an old button cannot approve a later action."""
+    global _remote_cb
+    _remote_cb = cb
+
+
+def resolve_remote(token: str, accepted: bool) -> bool:
+    """A yes/no that came from the remote device. True if it matched the live request."""
+    with _lock:
+        live = _pending is not None and token and _pending.token == token and \
+            time.monotonic() - _pending.at <= TIMEOUT_SECONDS
+    if not live:
+        return False
+    resolve(accepted)
+    return True
+
+
 def request(key: str, title: str, detail: str, run: Callable[[], str]) -> str:
     """Park an irreversible action behind the on-screen gate.
 
@@ -95,7 +116,8 @@ def request(key: str, title: str, detail: str, run: Callable[[], str]) -> str:
 
     with _lock:
         _pending = _Pending(key=key, title=title, detail=detail,
-                            run=run, at=time.monotonic())
+                            run=run, at=time.monotonic(), token=__import__("secrets").token_urlsafe(6))
+        _token = _pending.token
 
     try:
         _show_cb(title, detail)
@@ -104,6 +126,8 @@ def request(key: str, title: str, detail: str, run: Callable[[], str]) -> str:
             _pending = None
         return f"Could not ask for confirmation: {e}. Nothing was done."
 
+    if _remote_cb is not None:                       # also ask on the phone, without delaying the screen
+        threading.Thread(target=lambda: _remote_cb(title, detail, _token), daemon=True, name="confirm-remote").start()
     _log(f"SYS: Awaiting confirmation — {title}")
     return (
         f"[CONFIRMATION_PENDING] I have put a confirmation on screen for: {title}. "

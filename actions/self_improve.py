@@ -24,11 +24,16 @@ def self_improve(parameters: dict, player=None) -> str:
             p = sd.propose(task, _split(parameters.get("files")), str(parameters.get("upload", "")))
             if p.error:
                 return f"I could not make a safe change: {p.error}"
+            if getattr(player, "show_code_text", None) and p.diff:
+                player.show_code_text(f"proposal {p.id}", p.diff, "diff")          # review it in the app
             verdict = "tests PASS" if p.tests_passed else f"tests FAIL ({p.test_tail[-150:]})"
             return (f"Proposal {p.id}: {p.summary} — {len(p.files)} file(s), {verdict}. "
                     f"{'Say apply ' + p.id + ' to review and confirm it.' if p.tests_passed else 'It will not be applied.'}")
         if mode == "show":
             p = sd.load(str(parameters.get("id", "")))
+            if getattr(player, "show_code_text", None) and p.diff:
+                player.show_code_text(f"proposal {p.id}", p.diff, "diff")
+                return f"Showing proposal {p.id} in the code preview: {len(p.files)} file(s), tests {'passed' if p.tests_passed else 'FAILED'}."
             return p.diff[:3500] or "Empty proposal."
         if mode == "apply":
             p = sd.load(str(parameters.get("id", "")))

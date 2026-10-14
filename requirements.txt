@@ -22,6 +22,14 @@ google-genai>=2.8.0,<3
 # config/secrets.json. Without it the app still works.
 keyring>=24,<26
 
+# ── AI video maker (core/video_maker.py) ──────────────────────────────────────
+# imageio-ffmpeg bundles an ffmpeg binary, so videos and clips work without installing ffmpeg.
+# edge-tts (free online voices) is optional: without it the video has captions and no voice.
+imageio-ffmpeg>=0.4
+edge-tts>=6.1
+# Optional: a full browser engine for the code preview's "Website" mode (otherwise a basic HTML view is used)
+# PyQt6-WebEngine
+
 # ── Web search & browser control ──────────────────────────────────────────────
 requests>=2.31,<3
 beautifulsoup4>=4.12,<5

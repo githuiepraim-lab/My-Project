@@ -331,6 +331,37 @@ class Notifier:
             return False
 
 
+    def _api(self, method: str, **data) -> dict:
+        import requests
+        r = requests.post(f"https://api.telegram.org/bot{self.token}/{method}", json=data, timeout=20)
+        return r.json() if r.status_code == 200 else {}
+
+    def send_buttons(self, text: str, rows: list[list[tuple[str, str]]]) -> int | None:
+        """Message with tap buttons. rows = [[(label, callback_data), ...]]. Returns the message id."""
+        if not self.ready:
+            return None
+        try:
+            r = self._api("sendMessage", chat_id=self.chat_id, text=text[:3900],
+                          reply_markup={"inline_keyboard": [[{"text": a, "callback_data": b} for a, b in row] for row in rows]})
+            return (r.get("result") or {}).get("message_id")
+        except Exception as e:
+            from core.ai.redact import redact
+            print(f"[Jobs] Telegram buttons failed: {redact(e)[:120]}")
+            return None
+
+    def answer_callback(self, callback_id: str, text: str = "") -> None:
+        try:
+            self._api("answerCallbackQuery", callback_query_id=callback_id, text=text[:180])
+        except Exception:
+            pass
+
+    def edit_text(self, message_id: int, text: str) -> None:
+        try:
+            self._api("editMessageText", chat_id=self.chat_id, message_id=message_id, text=text[:3900])
+        except Exception:
+            pass
+
+
 # ── handlers: what a job can actually do ────────────────────────────────────
 _AI_SYSTEM = ("You are completing a scheduled task for the user while they are away. Produce the finished work "
               "directly: no questions, no preamble. Be concrete and well organised. You have NO internet access and "
@@ -382,7 +413,13 @@ def _h_clip(job: dict, ctx: "Context") -> tuple[str, str | None]:
     return f"Clip saved: {out.name}", str(out)
 
 
-HANDLERS = {"ai": _h_ai, "remind": _h_remind, "clip": _h_clip}
+def _h_video(job: dict, ctx: "Context") -> tuple[str, str | None]:
+    from core import video_maker
+    p = job["payload"]
+    return video_maker.make_video(ctx.hub(), str(p.get("topic") or job["title"]), int(p.get("seconds", 45)), str(p.get("style", "")))
+
+
+HANDLERS = {"ai": _h_ai, "remind": _h_remind, "clip": _h_clip, "video": _h_video}
 
 
 @dataclass
@@ -466,7 +503,17 @@ class JobRunner:
             j["next_id"] = clone["id"]
         self.on_event("done", j)
         head = f"✅ Job #{job['id']} done{' (ran late — the computer was off)' if late else ''}: {job['title']}"
-        self.notifier.send(f"{head}\n\n{text[:2500]}", [file] if file else None)
+        if job["kind"] == "remind":
+            self.notifier.send_buttons(f"⏰ Reminder: {text}" + (" (sent late — the computer was off)" if late else ""), [[("✅ Done", f"rm:{job['id']}:d"), ("💤 10 min", f"rm:{job['id']}:s10"),
+                                                              ("💤 1 hour", f"rm:{job['id']}:s60")]])
+        else:
+            self.notifier.send(f"{head}\n\n{text[:2500]}", [file] if file else None)
+        if job["payload"].get("approve"):                         # "…and ask me to approve it"
+            try:
+                from core.approvals import Approvals
+                Approvals(self.store.path, self.notifier).request(f"Accept the result of job #{job['id']}?", f"{job['title']}\n\n{text[:700]}")
+            except Exception as e:
+                print(f"[Jobs] approval request failed: {type(e).__name__}")
 
 
 # ── turning words into a job ────────────────────────────────────────────────
@@ -476,10 +523,21 @@ def add_from_text(store: JobStore, text: str, now: datetime | None = None) -> di
     task = rest or text.strip()
     kind, payload = "ai", {"prompt": task}
     m = re.match(r"^(?:please\s+)?remind(?:\s+me)?(?:\s+to)?\s+(.+)$", task, re.I)
+    v = re.match(r"^(?:please\s+)?(?:make|create|generate|produce)\s+(?:me\s+)?(?:an?\s+)?(?:ai\s+)?(?:\d{2,3}[- ]?(?:seconds?|secs?)\s+)?(?:short\s+|explainer\s+)?video(?:\s+(?:about|on|of|explaining))?\s+(.+)$", task, re.I)
+    sec = re.search(r"\b(\d{2,3})[- ]?(?:second|sec|s)\b", task, re.I)
     if m:
         kind, payload = "remind", {"text": m.group(1).strip()}
+    elif v:
+        kind, payload = "video", {"topic": re.sub(r"\b\d{2,3}[- ]?(?:second|sec|s)\b", "", v.group(1), flags=re.I).strip(" ,.-"),
+                                  "seconds": int(sec.group(1)) if sec else 45}
     elif re.search(r"\b(as a |into a |in a )?(pdf|report)\b", task, re.I):
         payload["pdf"] = True
+    if re.search(r"\b(for (my )?approval|ask me to approve|needs? my approval|let me approve)\b", task, re.I):
+        payload["approve"] = True
+        task = re.sub(r"\s*,?\s*\b(and )?(for (my )?approval|ask me to approve( it)?|needs? my approval|let me approve( it)?)\b", "", task, flags=re.I).strip() or task
+        payload["prompt"] = payload.get("prompt", task) if kind == "ai" else payload.get("prompt")
+        if kind == "ai":
+            payload["prompt"] = task
     ts = (when.run_at.timestamp() if when else time.time())
     return store.add(task, kind, payload, ts, when.repeat if when else None)
 
@@ -525,6 +583,37 @@ class TelegramInbox:
         rep = f" (repeats {job['repeat'].replace(':', ' ')})" if job.get("repeat") else ""
         return f"📋 Queued #{job['id']}: {job['title']}\n⏰ {describe_when(job['run_at'])}{rep}"
 
+    def _tap(self, cq: dict) -> None:
+        """A button on one of our messages was pressed."""
+        kind, _, rest = str(cq.get("data", "")).partition(":")
+        a, _, b = rest.partition(":")
+        msg_id = (cq.get("message") or {}).get("message_id")
+        try:
+            if kind == "ap" and a.isdigit():                              # approval buttons
+                from core.approvals import Approvals
+                say = Approvals(self.store.path, self.n).decide(int(a), b == "y")
+            elif kind == "rm" and a.isdigit():                            # reminder buttons
+                j = self.store.get(int(a))
+                if j is None:
+                    say = "That reminder is gone."
+                elif b == "d":
+                    say = "Marked done."
+                else:
+                    mins = 10 if b == "s10" else 60
+                    self.store.add(j["title"], "remind", j["payload"], time.time() + mins * 60)
+                    say = f"Snoozed for {mins} min."
+            elif kind == "cf" and a:                                      # the on-screen confirmation gate
+                from core import confirm
+                say = ("Confirmed." if b == "y" else "Cancelled.") if confirm.resolve_remote(a, b == "y") \
+                    else "That request has expired or was already answered."
+            else:
+                say = "Unknown button."
+        except Exception as e:
+            say = f"Could not do that ({type(e).__name__})."
+        self.n.answer_callback(cq.get("id", ""), say[:150])
+        if msg_id:
+            self.n.edit_text(msg_id, f"{(cq.get('message') or {}).get('text', '')[:700]}\n\n➡ {say}")
+
     def poll_once(self, timeout: int = 25) -> int:
         """One long-poll. ONLY messages from the configured chat are obeyed."""
         import requests
@@ -534,9 +623,58 @@ class TelegramInbox:
         handled = 0
         for u in (r.json().get("result") or []):
             self.offset = max(self.offset, int(u["update_id"]) + 1)
+            cq = u.get("callback_query")
+            if cq:
+                if str(((cq.get("message") or {}).get("chat") or {}).get("id", "")) == self.n.chat_id:   # only YOUR chat
+                    self._tap(cq)
+                    handled += 1
+                continue
             msg = u.get("message") or {}
             if str((msg.get("chat") or {}).get("id", "")) != self.n.chat_id or not msg.get("text"):
                 continue                                  # a stranger messaging your bot: ignored
             self.n.send(self.handle(msg["text"]))
             handled += 1
         return handled
+
+
+# ── who polls Telegram: the worker if one is running, otherwise the app ──────────────────
+LOCK_PATH = DB_PATH.parent / "worker.lock"
+
+
+def worker_alive(path: Path | None = None, now: float | None = None) -> bool:
+    """True if a headless worker has checked in within the last minute (it then owns Telegram,
+    because two programs polling one bot make Telegram reject both)."""
+    try:
+        return (now or time.time()) - float((path or LOCK_PATH).read_text().strip()) < 60
+    except Exception:
+        return False
+
+
+def touch_worker_lock(path: Path | None = None) -> None:
+    try:
+        (path or LOCK_PATH).write_text(str(time.time()))
+    except OSError:
+        pass
+
+
+class TelegramPoller(threading.Thread):
+    """Background Telegram listener for the desktop app (button taps and tasks from your phone)."""
+
+    def __init__(self, store: JobStore, notifier: Notifier, lock_path: Path | None = None, http=None) -> None:
+        super().__init__(daemon=True, name="telegram-poller")
+        self.inbox = TelegramInbox(store, notifier, http=http)
+        self.lock_path = lock_path
+        self._stop_ev = threading.Event()
+
+    def stop(self) -> None:
+        self._stop_ev.set()
+
+    def run(self) -> None:
+        while not self._stop_ev.is_set():
+            if worker_alive(self.lock_path):
+                self._stop_ev.wait(15)
+                continue
+            try:
+                self.inbox.poll_once(timeout=20)
+            except Exception:
+                self._stop_ev.wait(10)

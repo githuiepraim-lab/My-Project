@@ -320,8 +320,15 @@ class Coach:
 
 
 def open_in_editor(path: Path) -> bool:
-    """Open in an editor, never in a way that would RUN the file (on Windows the
+    """Optional external editor (config "code_external_editor": true); the app normally shows
+    code in its own preview. Never opens in a way that would RUN the file (on Windows the
     default action for .py is to execute it)."""
+    try:
+        from memory.config_manager import load_api_keys
+        if not load_api_keys().get("code_external_editor"):
+            return False
+    except Exception:
+        return False
     try:
         if (code := shutil.which("code")):
             subprocess.Popen([code, str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

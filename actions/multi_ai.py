@@ -64,9 +64,10 @@ def multi_ai(parameters: dict, player=None) -> str:
         results = hub.ask_many(prompt, targets or None)
         good = [r for r in results if r.ok]
         for r in results:
-            _log(player, f"{(r.provider or '?').upper()}: {r.text if r.ok else '(' + r.error.split(':')[0] + ')'}")
+            _log(player, f"{(r.provider or '?').upper()}: {r.text if r.ok else '(' + (r.error.partition(': ')[2] or r.error)[:120] + ')'}")
         if not good:
-            return "None of the AIs could answer right now."
+            why = "; ".join(f"{r.provider}: {(r.error.partition(': ')[2] or r.error)[:90]}" for r in results)
+            return f"None of the AIs could answer — {why}"
         if len(good) == 1 or mode == "ask" and len(targets) <= 1:
             return good[0].text
         return " | ".join(f"{r.provider}: {r.text}" for r in good)

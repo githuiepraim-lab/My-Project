@@ -63,7 +63,7 @@ class AISettingsDialog(QDialog):
 
         row = QHBoxLayout()
         for text, fn in (("Set key…", self._set_key), ("Fetch models", self._fetch),
-                         ("Test", self._test), ("Auto-fix models", self._autofix), ("Add provider…", self._add),
+                         ("Test", self._test), ("Test all", self._test_all), ("Auto-fix models", self._autofix), ("Add provider…", self._add),
                          ("Remove", self._remove)):
             b = QPushButton(text)
             b.clicked.connect(fn)
@@ -128,7 +128,7 @@ class AISettingsDialog(QDialog):
     def _add_row(self, name: str, p: dict) -> None:
         r = self.table.rowCount()
         self.table.insertRow(r)
-        on = QCheckBox(); on.setChecked(bool(p.get("enabled")))
+        on = QCheckBox(); on.setChecked(C.effectively_enabled(name, p))
         mem = QCheckBox(); mem.setChecked(bool(p.get("share_memory", False)))
         pr = QSpinBox(); pr.setRange(0, 999); pr.setValue(int(p.get("priority", 100)))
         self.table.setCellWidget(r, 0, on)
@@ -154,6 +154,7 @@ class AISettingsDialog(QDialog):
             name = self.table.item(r, 1).text()
             p = dict(self._cfg["providers"][name])
             p["enabled"] = self.table.cellWidget(r, 0).isChecked()
+            p["user_disabled"] = not p["enabled"]               # remembered: a key alone must not switch it back on
             p["priority"] = self.table.cellWidget(r, 2).value()
             p["share_memory"] = self.table.cellWidget(r, 4).isChecked()
             old = {m["id"]: m for m in p.get("models", [])}
@@ -208,10 +209,14 @@ class AISettingsDialog(QDialog):
         key, ok = QInputDialog.getText(self, f"API key for {name}", "Paste the key:",
                                        QLineEdit.EchoMode.Password)
         if ok and key.strip():
-            where = C.set_api_key(name, key.strip())
-            self.table.item(self.table.currentRow(), 3).setText(f"✓ {where}")
+            row = self.table.currentRow()
+            where = C.set_api_key(name, key.strip())            # cleans the key and switches the provider ON
+            self.table.item(row, 3).setText(f"✓ {where}")
+            self.table.cellWidget(row, 0).setChecked(True)
             self.hub.health.reset()
-            self._say(f"Key stored in {where}.")
+            self._cfg = C.load(force=True)
+            from .provider_doctor import check
+            self._work(lambda: check(self.hub, name)[1], f"Key stored in {where}. Testing {name}")
 
     def _work(self, fn, label: str) -> None:
         self._say(label + "…")
@@ -239,11 +244,16 @@ class AISettingsDialog(QDialog):
             return self._say("Select a provider first.")
         self._save()
         def fn():
-            r = self.hub.ask_many("Reply with the single word: ready", [name], max_tokens=20,
-                                  timeout=20)[0]
-            return (f"{name}: {r.text!r} in {r.latency:.2f}s, {r.usage.input}+{r.usage.output} tokens"
-                    if r.ok else f"{name}: {r.error}")
+            from .provider_doctor import check
+            return check(self.hub, name)[1]
         self._work(fn, f"Testing {name}")
+
+    def _test_all(self) -> None:
+        self._save()
+        from .provider_doctor import check_all
+        def fn():
+            return "\n".join(f"{'✓' if st in ('ok', 'fixed') else '✗'} {n}: {msg}" for n, st, msg in check_all(self.hub))
+        self._work(fn, "Testing every provider")
 
     def _autofix(self) -> None:
         name = self._name()

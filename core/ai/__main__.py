@@ -10,6 +10,7 @@
   models <provider>           ask the provider which models it offers
   test [prompt]               send one real request through the router
   usage                       tokens, latency and cost so far
+  check [provider]            test each AI with a real request and explain any failure
   fix <provider>              repair a provider that gives HTTP 404 (bad model / URL)
   doctor                      find out why the assistant cannot connect to Gemini
 """
@@ -37,11 +38,13 @@ def main(argv: list[str]) -> int:
                   f"key={src:14} models={','.join(m['id'] for m in p['models'])}")
         print("strategy:", cfg["settings"]["strategy"], "| mode:", cfg["settings"]["mode"])
     elif cmd in ("enable", "disable") and args:
-        C.update_provider(args[0], enabled=(cmd == "enable"))
+        C.update_provider(args[0], enabled=(cmd == "enable"), user_disabled=(cmd == "disable"))
         print(f"{args[0]} {'enabled' if cmd == 'enable' else 'disabled'}")
     elif cmd == "key" and args:
         k = getpass.getpass(f"API key for {args[0]} (hidden): ").strip()
-        print("stored in", C.set_api_key(args[0], k))
+        print("stored in", C.set_api_key(args[0], k), "— provider switched on. Testing…")
+        from .provider_doctor import check
+        print(check(get_hub(), args[0])[1])
     elif cmd == "priority" and len(args) == 2:
         C.update_provider(args[0], priority=int(args[1]))
     elif cmd == "add" and len(args) >= 3:
@@ -66,6 +69,11 @@ def main(argv: list[str]) -> int:
         r = hub.ask(" ".join(args) or "Reply with the single word: ready")
         print(f"[{r.label}] {r.text}\n{r.usage.input} in / {r.usage.output} out, "
               f"{r.latency:.2f}s, cost={r.cost}")
+    elif cmd == "check":
+        from .provider_doctor import check, check_all
+        hub = get_hub()
+        for n, st, msg in ([(args[0], *check(hub, args[0]))] if args else check_all(hub)):
+            print(f"{'OK  ' if st in ('ok', 'fixed') else '!!  '}{n:11} {msg}")
     elif cmd == "fix" and args:
         from .autofix import autofix_models
         print(autofix_models(get_hub(), args[0]))

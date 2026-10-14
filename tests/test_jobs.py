@@ -26,9 +26,11 @@ def store(tmp_path):
 
 class Rec(Notifier):
     def __init__(self):
-        super().__init__("tok", "42"); self.sent = []
+        super().__init__("tok", "42"); self.sent = []; self.buttons = []
     def send(self, text, files=None):
         self.sent.append((text, files)); return True
+    def send_buttons(self, text, rows):
+        self.buttons.append((text, rows)); return 1
 
 
 # ── time phrases ───────────────────────────────────────────────────────────
@@ -184,7 +186,7 @@ def test_repeating_job_queues_exactly_one_next_run(store):
     rows = store.list()
     queued = [x for x in rows if x["status"] == "queued"]
     assert len(queued) == 1 and datetime.fromtimestamp(queued[0]["run_at"]) == datetime(2026, 10, 15, 7, 0)
-    assert "ran late" in n.sent[0][0]
+    assert "sent late" in n.buttons[0][0]                                   # a reminder says it was late
 
 
 def test_runner_thread_picks_up_due_jobs_and_stops(store):

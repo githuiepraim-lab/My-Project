@@ -75,10 +75,19 @@ def _read_file(file_path: str) -> tuple[str, str]:
         return "", f"Could not read file: {e}"
 
 
+_player_ref = None
+
+
 def _save_file(path: Path, content: str) -> str:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
+        show = getattr(_player_ref, "show_code", None)
+        if show is not None:                 # preview it in the app (not an external editor)
+            try:
+                show([str(path)])
+            except Exception:
+                pass
         return f"Saved to: {path}"
     except Exception as e:
         return f"Could not save: {e}"
@@ -529,6 +538,8 @@ def code_helper(
     session_memory=None,
     speak=None
 ) -> str:
+    global _player_ref
+    _player_ref = player
     """
     Called from main.py.
 

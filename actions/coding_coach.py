@@ -9,7 +9,7 @@ from pathlib import Path
 
 from core import confirm
 from core.ai.redact import redact
-from core.coding_coach import LESSONS, Coach, open_in_editor
+from core.coding_coach import LESSONS, Coach
 
 _SYS = {
     "explain": "Explain this code to a beginner in under 120 words: what it does, step by step, in plain language. "
@@ -38,6 +38,15 @@ def _read(parameters: dict) -> str:
     return code[:20_000]
 
 
+def _show(player, path) -> bool:
+    """Show the file in the app's code preview (live: it refreshes as you save)."""
+    fn = getattr(player, "show_code", None)
+    if fn is None:
+        return False
+    fn([str(path)])
+    return True
+
+
 def coding_coach(parameters: dict, player=None) -> str:
     mode = str(parameters.get("mode", "lesson")).lower()
     coach = Coach()
@@ -48,8 +57,9 @@ def coding_coach(parameters: dict, player=None) -> str:
                 nxt = coach.next_lesson()
                 key = nxt.id if nxt else ""
             les, path, created = coach.start(key)
-            opened = open_in_editor(path) if created else False
-            note = (" I opened it in your editor." if opened else "") if created else " (Your earlier work in that file is untouched.)"
+            shown = _show(player, path)
+            note = (" I opened it in the code preview." if shown else "") if created else \
+                (" (Your earlier work in that file is untouched.)" + (" I opened it in the code preview." if shown else ""))
             return coach.describe(les, path) + note
         if mode == "hint":
             return coach.hint()

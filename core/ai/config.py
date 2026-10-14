@@ -22,6 +22,7 @@ import sys
 import threading
 from pathlib import Path
 
+from .doctor import clean_key
 from .redact import register_secret
 
 if getattr(sys, "frozen", False):
@@ -282,25 +283,25 @@ def _keyring():
 def get_api_key(provider: str) -> str:
     """The key for `provider`, or "". Never raises, never logs."""
     for n in _env_names(provider):
-        v = os.environ.get(n, "").strip()
+        v = clean_key(os.environ.get(n, ""))
         if v:
             register_secret(v)
             return v
     kr = _keyring()
     if kr is not None:
         try:
-            v = kr.get_password(KEYRING_SERVICE, provider) or ""
+            v = clean_key(kr.get_password(KEYRING_SERVICE, provider) or "")
             if v:
                 register_secret(v)
                 return v
         except Exception:
             pass
-    v = str(_read_json(SECRETS_FILE).get(provider, "") or "").strip()
+    v = clean_key(_read_json(SECRETS_FILE).get(provider, "") or "")
     if v:
         register_secret(v)
         return v
     if provider == "gemini":
-        v = str(_read_json(LEGACY_FILE).get("gemini_api_key", "") or "").strip()
+        v = clean_key(_read_json(LEGACY_FILE).get("gemini_api_key", "") or "")
         if v:
             register_secret(v)
             return v
@@ -308,11 +309,25 @@ def get_api_key(provider: str) -> str:
 
 
 def set_api_key(provider: str, key: str) -> str:
-    """Store a key. Returns where it went: "keyring" or "secrets.json"."""
-    key = (key or "").strip()
+    """Store a key. Returns where it went: "keyring" or "secrets.json".
+
+    The key is cleaned first (whitespace anywhere, quotes, a 'Bearer ' prefix: the usual
+    result of copy-paste) and, for a provider in the list, the provider is switched ON:
+    adding a key and then finding the provider still "absent" was the commonest complaint."""
+    key = clean_key(re.sub(r"^\s*bearer\s+", "", str(key or ""), flags=re.I))
     if not key:
         raise ValueError("empty key")
     register_secret(key)
+    where = _store_secret(provider, key)
+    try:
+        if provider in load()["providers"]:
+            update_provider(provider, enabled=True, user_disabled=False)
+    except Exception:
+        pass
+    return where
+
+
+def _store_secret(provider: str, key: str) -> str:
     kr = _keyring()
     if kr is not None:
         try:
@@ -367,8 +382,18 @@ def key_source(provider: str) -> str:
     return ""
 
 
+def effectively_enabled(name: str, p: dict) -> bool:
+    """On if ticked, OR a key exists and the user never switched it off. A key that is
+    present but ignored because a box was not ticked is the same as "it does not work"."""
+    if p.get("enabled"):
+        return True
+    if p.get("user_disabled") or p.get("requires_key", True) is False:
+        return False
+    return bool(get_api_key(name))
+
+
 def is_available(name: str, p: dict) -> bool:
-    if not p.get("enabled"):
+    if not effectively_enabled(name, p):
         return False
     if p.get("requires_key", True) is False:
         return True

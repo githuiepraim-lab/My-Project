@@ -6,6 +6,7 @@ retries, and can also use several AIs at once or let them talk to each other.
 from __future__ import annotations
 
 import concurrent.futures as cf
+import json
 import random
 import re
 import threading
@@ -82,21 +83,59 @@ class Hub:
         self._sleep, self._clock = sleep, clock
         self._adapters: dict[str, tuple] = {}
         self._lock = threading.Lock()
+        self._sigs: dict[str, str] = {}
 
     # ── configuration view ──────────────────────────────────────────────────
     @property
     def settings(self) -> dict:
         return self._load()["settings"]
 
+    def _enabled(self, name: str, p: dict) -> bool:
+        if p.get("enabled"):
+            return True
+        return not (p.get("user_disabled") or p.get("requires_key", True) is False) and bool(self._key(name))
+
+    def _refresh_credentials(self) -> None:
+        """If a provider's key, URL or model list CHANGED since we last looked, forget its
+        cooldowns. A wrong key used to lock a provider out for hours even after the right one
+        was pasted, and fixing a model name did not help either."""
+        import hashlib
+        for name, p in self._load()["providers"].items():
+            sig = hashlib.sha1(json.dumps([self._key(name), p.get("base_url"), p.get("kind"),
+                                           [m.get("id") for m in p.get("models", [])]]).encode()).hexdigest()
+            if name in self._sigs and self._sigs[name] != sig:
+                for m in p.get("models", []):
+                    self.health.reset(f"{name}/{m.get('id')}")
+            self._sigs[name] = sig
+
     def _available_providers(self) -> dict[str, dict]:
+        self._refresh_credentials()
         out = {}
         for name, p in self._load()["providers"].items():
-            if not p.get("enabled"):
+            if not self._enabled(name, p):
                 continue
             if p.get("requires_key", True) is not False and not self._key(name):
                 continue
             out[name] = p
         return out
+
+    def why_unavailable(self, name: str) -> str:
+        """Plain-language reason a provider is not being used."""
+        p = self._load()["providers"].get(name)
+        if p is None:
+            return f"'{name}' is not in your provider list (Settings → AI providers → Add provider)"
+        if p.get("requires_key", True) is not False and not self._key(name):
+            return f"{name} has no API key yet (Settings → AI providers → Set key)"
+        if p.get("user_disabled"):
+            return f"{name} is switched off (tick On in Settings → AI providers)"
+        if not p.get("models"):
+            return f"{name} has no models listed (press Auto-fix models)"
+        cool = [(m["id"], self.health.remaining(f"{name}/{m['id']}")) for m in p["models"]]
+        if cool and all(r > 0 for _, r in cool):
+            st = self.health.snapshot().get(f"{name}/{cool[0][0]}", {})
+            return (f"{name} is resting after errors ({st.get('last_error', 'error')}) for about "
+                    f"{int(min(r for _, r in cool) // 60) + 1} min — run: python -m core.ai check {name}")
+        return f"{name} is available"
 
     def models(self, include_unavailable: bool = False) -> list[ModelSpec]:
         provs = self._load()["providers"] if include_unavailable else self._available_providers()
@@ -355,6 +394,7 @@ class Hub:
 
     # ── several AIs at once ─────────────────────────────────────────────────
     def resolve_target(self, target: str, profile_req: Request | None = None) -> tuple[ModelSpec, str]:
+        # (the reason for a missing AI is spelled out below instead of a bare "not found")
         """'agent' | 'provider' | 'provider/model' -> (spec, persona)."""
         cfg = self._load()
         persona = ""
@@ -374,7 +414,7 @@ class Hub:
                 if m.tier >= tier:
                     return m, persona
             return same[-1], persona
-        raise AIError("not_found", f"no available AI called '{target}'")
+        raise AIError("not_found", self.why_unavailable(name))
 
     def default_targets(self, limit: int = 4) -> list[str]:
         best: dict[str, ModelSpec] = {}
@@ -528,7 +568,7 @@ class Hub:
         cfg = self._load()
         provs = {}
         for n, p in cfg["providers"].items():
-            provs[n] = {"enabled": p.get("enabled", False),
+            provs[n] = {"enabled": self._enabled(n, p), "state": self.why_unavailable(n),
                         "key": bool(self._key(n)) or p.get("requires_key", True) is False,
                         "key_source": cfgmod.key_source(n), "priority": p.get("priority"),
                         "models": [m["id"] for m in p.get("models", [])]}

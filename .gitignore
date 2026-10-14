@@ -59,3 +59,4 @@ evals/results/
 proposals/
 memory/coding_progress.json
 memory/jobs.db*
+config/integrations.json

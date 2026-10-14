@@ -24,16 +24,18 @@ SHARED_DIR = Path.home() / "Documents" / "Ephraim Reports" / "Shared"
 MAX_COPY = 500 * 1024 * 1024
 _IMG = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"}
 _VID = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v"}
-_TXT = {".txt", ".md", ".json", ".csv", ".log", ".py", ".html"}
-_ICON = {"pdf": "📄", "image": "🖼", "video": "🎬", "zip": "🗜", "text": "📝", "file": "📎"}
+_TXT = {".txt", ".csv", ".log"}
+_ICON = {"pdf": "📄", "image": "🖼", "video": "🎬", "zip": "🗜", "text": "📝", "web": "🌐", "code": "💻", "markdown": "📘", "file": "📎"}
 _SENSITIVE_NAMES = ("secrets", "api_keys", ".env", "credentials", "id_rsa", "id_ed25519", "token", "password", ".pem")
 _SENSITIVE_DIRS = (".ssh", ".aws", ".gnupg", "config")
 
 
 def kind_of(path) -> str:
     s = Path(path).suffix.lower()
+    from core.code_view import CODE_EXT
     return ("pdf" if s == ".pdf" else "image" if s in _IMG else "video" if s in _VID
-            else "zip" if s == ".zip" else "text" if s in _TXT else "file")
+            else "zip" if s == ".zip" else "web" if s in (".html", ".htm") else "markdown" if s in (".md", ".markdown")
+            else "code" if s in CODE_EXT else "text" if s in _TXT else "file")
 
 
 def is_sensitive(path) -> bool:
@@ -180,6 +182,9 @@ class PreviewDialog(QDialog):
                 for i in z.infolist()[:500]:
                     lw.addItem(f"{i.filename}    ({human_size(i.file_size)})")
             return lw
+        if k in ("web", "code", "markdown"):
+            from core.code_view import CodePreview
+            return CodePreview(path)                    # highlighted code / rendered website / markdown
         if k == "text":
             t = QPlainTextEdit(); t.setReadOnly(True)
             t.setPlainText(Path(path).read_text(encoding="utf-8", errors="replace")[:200_000])

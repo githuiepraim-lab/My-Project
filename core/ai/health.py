@@ -51,7 +51,7 @@ class Health:
                 cool = err.retry_after if err.retry_after else 60.0 * (2 ** (n - 1))
                 cool = min(cool, 900.0)
             elif err.kind in ("auth", "not_found"):
-                cool = 6 * 3600.0   # will not fix itself; wait for a config change
+                cool = 15 * 60.0    # a changed key / URL / model list clears it at once (see Hub); else retry in 15 min
             elif err.kind == "invalid_response":
                 cool = 20.0 * n
             else:                   # timeout / unavailable / network
