@@ -566,6 +566,27 @@ class DashboardServer:
             from fastapi.responses import RedirectResponse
             return RedirectResponse(_CRYPTOJS_CDN)
 
+        # ── installable phone app (PWA). Public static files only: no tokens, no API, no private data. ──
+        @app.get("/manifest.webmanifest")
+        async def manifest():
+            return FileResponse(str(STATIC_DIR / "manifest.webmanifest"), media_type="application/manifest+json")
+
+        @app.get("/sw.js")
+        async def service_worker():
+            return FileResponse(str(STATIC_DIR / "sw.js"), media_type="application/javascript",
+                                headers={"Service-Worker-Allowed": "/", "Cache-Control": "no-cache"})
+
+        @app.get("/icons/{name}")
+        async def icon(name: str):
+            f = (STATIC_DIR / "icons" / name)
+            if "/" in name or "\\" in name or not re.fullmatch(r"[A-Za-z0-9._-]+\.png", name) or not f.is_file():
+                return JSONResponse({"error": "not found"}, status_code=404)
+            return FileResponse(str(f), media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
+
+        @app.get("/install", response_class=HTMLResponse)
+        async def install_page():
+            return HTMLResponse(_read("install.html"))
+
         @app.get("/login", response_class=HTMLResponse)
         async def login_page():
             return HTMLResponse(self._login_html)

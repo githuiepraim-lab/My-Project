@@ -2946,6 +2946,7 @@ class MainWindow(QMainWindow):
     _remote_file_sig = pyqtSignal(str)      # a file uploaded from the phone
     _job_sig        = pyqtSignal(str, int)  # (event, job id) from the background job runner
     _code_sig       = pyqtSignal(str)       # JSON: files or text to show in the code preview
+    _gesture_cmd_sig = pyqtSignal(str)      # on / off / arm / reset from the voice tool
     _state_sig      = pyqtSignal(str)
     _content_sig    = pyqtSignal(str, str)   # (title, text) — thread-safe content display
     _reconfig_sig   = pyqtSignal()           # trigger setup overlay from any thread
@@ -3234,6 +3235,7 @@ class MainWindow(QMainWindow):
         self._remote_file_sig.connect(self._on_remote_file)
         self._job_sig.connect(self._on_job_event)
         self._code_sig.connect(self._on_show_code)
+        self._gesture_cmd_sig.connect(self._on_gesture_cmd)
         self._state_sig.connect(self._apply_state)
         self._content_sig.connect(self._show_content)
         self._reconfig_sig.connect(self._show_setup)
@@ -4336,6 +4338,14 @@ class MainWindow(QMainWindow):
         self._avatar_btn.clicked.connect(self._toggle_avatar_style)
         self._refresh_avatar_btn()
 
+        self._tg_btn = _row(QPushButton("✈  TELEGRAM: connect"))
+        self._tg_btn.clicked.connect(self._open_telegram_setup)
+        self._tg_btn.setStyleSheet(self._avatar_btn.styleSheet())
+
+        self._gest_btn = _row(QPushButton("🖐  GESTURES"))
+        self._gest_btn.clicked.connect(self._toggle_gestures)
+        self._gest_btn.setStyleSheet(self._avatar_btn.styleSheet())
+
         self._code_btn = _row(QPushButton("💻  CODE PREVIEW"))
         self._code_btn.clicked.connect(lambda: self._on_show_code("{}"))
         self._code_btn.setStyleSheet(self._avatar_btn.styleSheet())
@@ -5266,6 +5276,43 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self._log.append_log(f"SYS: Could not open the phone upload ({type(e).__name__}: {str(e)[:80]}).")
 
+    # ── hand gestures ────────────────────────────────────────────────────────
+    def _ensure_gesture_panel(self):
+        if getattr(self, "_gesture_dock", None) is None:
+            from PyQt6.QtWidgets import QDockWidget
+            from core.gesture_panel import GesturePanel
+            from memory.config_manager import _save_flag, load_api_keys
+            self._gesture_panel = GesturePanel(load_api_keys(), save=_save_flag)
+            self._gesture_panel.status.connect(self._log.append_log)
+            self._gesture_panel.appAction.connect(self._on_gesture_app_action)
+            self._gesture_dock = QDockWidget("GESTURES", self)
+            self._gesture_dock.setWidget(self._gesture_panel)
+            self._gesture_dock.setAllowedAreas(Qt.DockWidgetArea.RightDockWidgetArea)
+            self._gesture_dock.setFloating(True)
+            self._gesture_dock.resize(460, 760)
+            self._gesture_dock.hide()
+        return self._gesture_panel
+
+    def _toggle_gestures(self):
+        self._ensure_gesture_panel()
+        if self._gesture_dock.isVisible():
+            self._gesture_dock.hide()
+        else:
+            self._gesture_dock.show(); self._gesture_dock.raise_()
+
+    def _on_gesture_cmd(self, cmd: str):
+        p = self._ensure_gesture_panel()
+        if cmd == "on":
+            self._gesture_dock.show(); self._gesture_dock.raise_(); p.start()
+        elif cmd == "off":
+            p.stop()
+        elif cmd == "arm" and p.service:
+            p.service.engine.arm(p.service.now())
+
+    def _on_gesture_app_action(self, action: str):
+        {"show_files": self._toggle_files, "show_jobs": self._toggle_jobs,
+         "show_code": lambda: self._on_show_code("{}"), "toggle_mute": self._toggle_mute}.get(action, lambda: None)()
+
     # ── code preview (the app's own viewer; nothing opens in VS Code) ────────
     def _on_show_code(self, payload: str):
         import json as _json
@@ -5320,16 +5367,41 @@ class MainWindow(QMainWindow):
                                      on_event=lambda kind, job: self._job_sig.emit(kind, int(job["id"])))
         self._job_runner.start()
         self._ensure_jobs_panel()
+        self._start_telegram()
+
+    def _start_telegram(self):
+        """Start listening to Telegram (button taps, tasks from your phone) and offer on-screen confirmations
+        there too. Safe to call again after connecting or disconnecting."""
+        from core import confirm
+        from core.jobs import Notifier, TelegramPoller
+        old = getattr(self, "_tg_poller", None)
+        if old is not None:
+            old.stop(); self._tg_poller = None
         notifier = Notifier.from_config()
-        if notifier.ready:
-            from core import confirm
-            from core.jobs import TelegramPoller
-            self._tg_poller = TelegramPoller(self._job_store, notifier)
-            self._tg_poller.start()
-            # The on-screen confirmation is ALSO offered on your phone (answer within 90 s).
-            confirm.bind_remote(lambda title, detail, token: notifier.send_buttons(
-                f"🔐 Confirm on your computer?\n{title}\n\n{detail[:600]}",
-                [[("✅ Confirm", f"cf:{token}:y"), ("❌ Cancel", f"cf:{token}:n")]]))
+        if not notifier.ready:
+            confirm.bind_remote(None)
+            self._refresh_tg_btn()
+            return
+        self._tg_poller = TelegramPoller(self._job_store, notifier)
+        self._tg_poller.start()
+        confirm.bind_remote(lambda title, detail, token: notifier.send_buttons(
+            f"🔐 Confirm on your computer?\n{title}\n\n{detail[:600]}",
+            [[("✅ Confirm", f"cf:{token}:y"), ("❌ Cancel", f"cf:{token}:n")]]))
+        self._refresh_tg_btn()
+
+    def _refresh_tg_btn(self):
+        try:
+            from core.jobs import Notifier
+            self._tg_btn.setText("✈  TELEGRAM: connected" if Notifier.from_config().ready else "✈  TELEGRAM: connect")
+        except Exception:
+            pass
+
+    def _open_telegram_setup(self):
+        from core.telegram_dialog import TelegramDialog
+        dlg = TelegramDialog(self)
+        dlg.connected.connect(self._start_telegram)
+        dlg.exec()
+        self._refresh_tg_btn()
 
     def _on_job_event(self, kind: str, jid: int):
         """Qt thread: tell the user in the chat, refresh the panel, show any file produced."""
@@ -6025,6 +6097,17 @@ class JarvisUI:
 
     def write_log(self, text: str):
         self._win._log_sig.emit(text)
+
+    def gesture_command(self, cmd: str):
+        """Thread-safe: on / off / arm."""
+        self._win._gesture_cmd_sig.emit(cmd)
+
+    def gesture_status(self) -> str:
+        p = getattr(self._win, "_gesture_panel", None)
+        if p is None or not p.is_on():
+            return "Gesture control is off."
+        e = p.service.engine
+        return "Gesture control is on" + (", armed." if e.armed(p.service.now()) else (", waiting for an open palm to arm." if e.require_arm else "."))
 
     def show_code(self, paths):
         """Thread-safe: show file(s) in the in-app code preview (live: it follows edits)."""

@@ -551,7 +551,7 @@ def announce(job: dict, notifier: Notifier) -> bool:
 # ── Telegram inbox (phone -> queue, works while the laptop is off if this runs elsewhere) ──
 class TelegramInbox:
     HELP = ("Send me a task and when, e.g. 'write a study plan for Python tomorrow 7am'.\n"
-            "/jobs  list   ·  /result N  ·  /cancel N  ·  /run N  ·  /help")
+            "/ask <question>  ·  /status  ·  /jobs  ·  /result N  ·  /cancel N  ·  /run N  ·  /help")
 
     def __init__(self, store: JobStore, notifier: Notifier, http=None) -> None:
         self.store, self.n = store, notifier
@@ -562,6 +562,11 @@ class TelegramInbox:
         t = (text or "").strip()
         if not t or t.startswith("/start") or t.startswith("/help"):
             return self.HELP
+        if re.match(r"^/ask(\s|$)", t):
+            q = t[4:].strip()
+            return self._ask(q) if q else "Usage: /ask <your question>"
+        if t.startswith("/status"):
+            return self._status()
         m = re.match(r"^/(jobs|result|cancel|run)\s*(\d+)?", t)
         if m:
             cmd, n = m.group(1), m.group(2)
@@ -582,6 +587,30 @@ class TelegramInbox:
         job = add_from_text(self.store, task)
         rep = f" (repeats {job['repeat'].replace(':', ' ')})" if job.get("repeat") else ""
         return f"📋 Queued #{job['id']}: {job['title']}\n⏰ {describe_when(job['run_at'])}{rep}"
+
+    def _ask(self, q: str) -> str:
+        """A quick question to your AI, from your phone. Answers in text only; it cannot act on the computer."""
+        try:
+            from core.ai import get_hub
+            from core.ai.types import Request
+            r = get_hub().ask(Request(messages=[{"role": "user", "content": q[:1500]}], task="chat", max_output_tokens=500, timeout=60, cacheable=False,
+                                      system="You are JARVIS, replying in a Telegram chat. Be brief and plain."))
+            return r.text[:3500]
+        except Exception as e:
+            return f"I could not reach an AI right now ({type(e).__name__}). Try /status."
+
+    def _status(self) -> str:
+        rows = self.store.list(limit=200)
+        q = sum(j["status"] == "queued" for j in rows); run = sum(j["status"] == "running" for j in rows)
+        failed = sum(j["status"] == "failed" for j in rows)
+        out = [f"🟢 JARVIS is running.", f"Jobs: {q} queued, {run} running, {failed} failed."]
+        try:
+            from core import sysdoctor
+            bad = [f for f in sysdoctor.diagnose(net=lambda: (True, ""), audio=lambda: (True, "")) if f.severity in ("bad", "warn")]
+            out.append("Health: all good." if not bad else "Health: " + "; ".join(f.title for f in bad[:3]))
+        except Exception:
+            pass
+        return "\n".join(out)
 
     def _tap(self, cq: dict) -> None:
         """A button on one of our messages was pressed."""
