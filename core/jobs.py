@@ -557,9 +557,14 @@ class TelegramInbox:
         self.store, self.n = store, notifier
         self.offset = 0
         self._http = http
+        self.awaiting_name = None
 
     def handle(self, text: str) -> str:
         t = (text or "").strip()
+        if self.awaiting_name is not None and t and not t.startswith("/"):
+            pid, self.awaiting_name = self.awaiting_name, None
+            from core.people import People
+            return People().resolve(pid, t[:40])                       # you (the owner) just told me who it is
         if not t or t.startswith("/start") or t.startswith("/help"):
             return self.HELP
         if re.match(r"^/ask(\s|$)", t):
@@ -631,6 +636,11 @@ class TelegramInbox:
                     mins = 10 if b == "s10" else 60
                     self.store.add(j["title"], "remind", j["payload"], time.time() + mins * 60)
                     say = f"Snoozed for {mins} min."
+            elif kind == "nm" and a.isdigit():                            # "Name them" under an unknown-person alert
+                self.awaiting_name = int(a); say = "Send me the name for this person (just the name)."
+            elif kind == "ig" and a.isdigit():
+                from core.people import People
+                People().ignore(int(a)); say = "Ignored."
             elif kind == "cf" and a:                                      # the on-screen confirmation gate
                 from core import confirm
                 say = ("Confirmed." if b == "y" else "Cancelled.") if confirm.resolve_remote(a, b == "y") \
